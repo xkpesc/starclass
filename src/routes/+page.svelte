@@ -1,15 +1,32 @@
-<!-- YOU CAN DELETE EVERYTHING IN THIS PAGE -->
+<script lang="ts">
+	import { Stepper, Step } from '@skeletonlabs/skeleton';
+</script>
 
-<div class="container h-full mx-auto flex justify-center items-center">
-	<div class="space-y-5">
-		<h1 class="h1">Let's get cracking bones!</h1>
-		<p>Start by exploring:</p>
-		<ul>
-			<li><code class="code">/src/routes/+layout.svelte</code> - barebones layout</li>
-			<li><code class="code">/src/app.postcss</code> - app wide css</li>
-			<li>
-				<code class="code">/src/routes/+page.svelte</code> - this page, you can replace the contents
-			</li>
-		</ul>
+
+<div class="container h-full mx-auto flex flex-col justify-center items-center">
+	<div class="text-center p-16">
+		<h1 class="h1">Starclass</h1>
+	</div>
+	<div class="container mx-auto px-20">
+		<div class="w-full card p-10 flex flex-col text-token bg-initial items-center">
+			<Stepper class="w-full" >
+				<Step>
+					<svelte:fragment slot="header">(header)</svelte:fragment>
+					(content)
+				</Step>
+				<Step>
+					<svelte:fragment slot="header">(header)</svelte:fragment>
+					(content)
+				</Step>
+				<Step>
+					<svelte:fragment slot="header">(header)</svelte:fragment>
+					(content)
+				</Step>
+				<Step>
+					<svelte:fragment slot="header">(header)</svelte:fragment>
+					(content)
+				</Step>
+			</Stepper>
+		</div>
 	</div>
 </div>
