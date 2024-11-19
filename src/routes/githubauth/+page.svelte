@@ -111,7 +111,9 @@
                 }
                 );
                 
+                //@ts-ignore
                 if (response.status === 200 && response.data.content) {
+                //@ts-ignore
                     const content = atob(response.data.content); // Decode base64 content
                     return { content, originalReadmeName: filePath };
                 }
