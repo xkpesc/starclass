@@ -62,19 +62,20 @@
 
                 
                     <Stepper
-                        class="w-full h-full overflow-hidden"
+                        class="w-full h-full"
                         on:step={handleStepChange}
                         start={currentStepIndex}
-                        regionContent="overflow-auto debugh justify-center h-full"
+                        regionContent="debugh h-full"
                     >
                     
                         {#each steps as { header, component }, i}
                         
-                            <Step >
+                            <Step class="h-full flex flex-col items-stretch justify-between p-10"
+                            regionHeader="flex-initial"
+                            regionContent="overflow-hidden flex-initial"
+                            regionNavigation="flex-initial pt-4">
                                 <svelte:fragment slot="header">{header}</svelte:fragment>
-                                <!-- <div id="tempip" class="h-full overflow-auto debugh flex flex-col justify-center bg-slate-500"> -->
-                                    <svelte:component this={component} />
-                                <!-- </div> -->
+                                    <svelte:component this={component}/>
                             </Step>
                        
                         {/each}
@@ -86,11 +87,6 @@
 </div>
 
 <style>
-    .debugh {
-        /* height: 600px; */
-        /* overflow-y: scroll; */
-        /* max-height: 1000px; */
-    }
     .debugcontent{
         border: 3px solid yellow;
         height: 2500px;

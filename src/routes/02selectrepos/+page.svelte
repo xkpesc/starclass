@@ -48,16 +48,20 @@ File: src/routes/02selectrepos/+page.svelte
 </script>
 
 <!-- <ContainerSlot> -->
-    <h2>GitHub Starred Repositories</h2>
+    <h2 class="h4">GitHub Starred Repositories</h2>
     <!-- TODO delayed: add quick search -->
-    <RecursiveTreeView
-        selection
-        multiple
-        hyphenOpacity="opacity-10"
-        nodes={reposTreeViewNodes}
-        regionChildren="bg-slate-200"
-        bind:checkedNodes
-    />
+     
+    <div class="h-full overflow-auto">
+        <RecursiveTreeView
+            selection
+            multiple
+            hyphenOpacity="opacity-10"
+            nodes={reposTreeViewNodes}
+            regionChildren=""
+            bind:checkedNodes
+            class=""
+        />
+    </div>
 <!-- </ContainerSlot> -->
 
 <!-- 
