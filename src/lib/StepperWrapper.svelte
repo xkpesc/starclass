@@ -53,31 +53,54 @@
     }
 </script>
 
+<div class="container h-screen m-auto flex flex-col justify-center items-center debugred overflow-hidden">
+    <!-- <div class="text-center p-16">
+        <h1 class="h1">Starclass</h1>
+    </div> -->
+    <div class="container mx-auto py-20 flex justify-center items-center h-full debugblue">
+        <div class="card w-full p-10 flex flex-col text-token bg-initial items-center h-full max-h-full ">
 
-<div class="container h-full mx-auto flex flex-col justify-center items-center">
-    <div class="text-center p-16">
-        <!-- <h1 class="h1">Starclass</h1> -->
-    </div>
-    <div class="container mx-auto px-20">
-        <div class="w-full card p-10 flex flex-col text-token bg-initial items-center">
-            <Stepper
-                class="w-full"
-                on:step={handleStepChange}
-                start={currentStepIndex}
-            >
-            <ContainerSlot>
-
-                {#each steps as { header, component }, i}
-                    <Step>
-                        <svelte:fragment slot="header">{header}</svelte:fragment>
-                        <svelte:component this={component} />
-                    </Step>
-                {/each}
-
-
-            </ContainerSlot>
-
-            </Stepper>
+                
+                    <Stepper
+                        class="w-full h-full overflow-hidden"
+                        on:step={handleStepChange}
+                        start={currentStepIndex}
+                        regionContent="overflow-auto debugh justify-center h-full"
+                    >
+                    
+                        {#each steps as { header, component }, i}
+                        
+                            <Step >
+                                <svelte:fragment slot="header">{header}</svelte:fragment>
+                                <!-- <div id="tempip" class="h-full overflow-auto debugh flex flex-col justify-center bg-slate-500"> -->
+                                    <svelte:component this={component} />
+                                <!-- </div> -->
+                            </Step>
+                       
+                        {/each}
+                   
+                    </Stepper>
+                
         </div>
     </div>
 </div>
+
+<style>
+    .debugh {
+        /* height: 600px; */
+        /* overflow-y: scroll; */
+        /* max-height: 1000px; */
+    }
+    .debugcontent{
+        border: 3px solid yellow;
+        height: 2500px;
+    }
+    .debugred{
+        border: 2px solid red;
+        box-sizing: border-box;
+    }
+    .debugblue{
+        border: 3px dotted blue;
+        box-sizing: border-box;
+    }
+</style>

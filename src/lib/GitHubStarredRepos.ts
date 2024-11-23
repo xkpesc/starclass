@@ -45,46 +45,48 @@ async function getLastStarredRepo(): Promise<string | null> {
 }
 
 // Main function to get starred repos with a stopping point based on the last fetch
-export async function getStarredRepos(page: number = 1, page_end: number = -1): Promise<void> {
+export async function* getStarredRepos(page: number = 1, page_end: number = -1): AsyncGenerator<{ status: string }, void, unknown> {
     const octokit = getOctokitInstance();
     const stopAt = await getLastStarredRepo();
     try {
-        const response = await octokit.request("GET /user/starred", {
-            per_page: 100,
-            page: page,
-            sort: "created",
-            direction: "desc",
-            headers: {
-                accept: "application/vnd.github.star+json",
-            },
-        });
-        const repos = response.data.map((repo: any) => ({
-            id: repo.repo.id,
-            name: repo.repo.full_name,
-            description: repo.repo.description,
-            url: repo.repo.html_url,
-            starred_at: repo.starred_at,
-            language: repo.repo.language,
-            github_readme: null, // Initialize with null on first download
-        }));
-        console.log(`Page ${page}: fetched ${repos.length} repos`);
+        while (true) {
+            const response = await octokit.request("GET /user/starred", {
+                per_page: 100,
+                page: page,
+                sort: "created",
+                direction: "desc",
+                headers: {
+                    accept: "application/vnd.github.star+json",
+                },
+            });
+            const repos = response.data.map((repo: any) => ({
+                id: repo.repo.id,
+                name: repo.repo.full_name,
+                description: repo.repo.description,
+                url: repo.repo.html_url,
+                starred_at: repo.starred_at,
+                language: repo.repo.language,
+                github_readme: null, // Initialize with null on first download
+            }));
+            yield { status: `Page ${page}: fetched ${repos.length} repos` };
 
-        console.log(response.data[0].starred_at)
-        console.log(repos[0].starred_at)
+            // Stop fetching if we've reached already fetched repos
+            if (stopAt && repos.some((repo: any) => new Date(repo.starred_at) <= new Date(stopAt))) {
+                yield { status: "All new repos are up-to-date." };
+                //TODO delayed: yield the name and date of the last starred repo and show on UI
+                return;
+            }
 
-        // Stop fetching if we've reached already fetched repos
-        if (stopAt && repos.some((repo: any) => new Date(repo.starred_at) <= new Date(stopAt))) {
-            console.log("All new repos are up-to-date, stopping further calls.");
-            return;
-        }
+            await saveStarredReposToDB(repos);
 
-        await saveStarredReposToDB(repos);
+            if (repos.length < 100 || (page_end !== -1 && page >= page_end)) {
+                return;
+            }
 
-        if (repos.length === 100 && (page_end === -1 || page < page_end)) {
-            await getStarredRepos(page + 1, page_end);
+            page++;
         }
     } catch (error: any) {
-        console.error("Error fetching starred repositories: ", error);
+        yield { status: `Error fetching starred repositories: ${error}` };
     }
 }
 
@@ -101,7 +103,7 @@ async function saveStarredReposToDB(repos: any[]): Promise<void> {
 }
 
 // Load starred repos from IndexedDB
-async function loadStarredReposFromDB(): Promise<any[]> {
+export async function loadStarredReposFromDB(): Promise<any[]> {
     await ensureDBInitialized();
     const tx = db!.transaction(STARS_STORE, "readonly");
     const store = tx.objectStore(STARS_STORE);

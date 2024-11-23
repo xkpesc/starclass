@@ -1,7 +1,7 @@
 <script lang="ts">
     import { error } from '@sveltejs/kit'; // Used to handle errors like 404
     import { page } from '$app/stores'; // Importing the $page store for reactive route params
-    import StepperComponent from '$lib/StepperWrapper.svelte'; // The Stepper logic and UI component
+    import StepperWrapper from '$lib/StepperWrapper.svelte'; // The Stepper logic and UI component
     import { beforeUpdate } from 'svelte';
   import ContainerSlot from '$lib/ContainerSlot.svelte';
 
@@ -20,12 +20,12 @@
 
 </script>
 
-<h2>[slug]/+page.svelte</h2>
+<!-- <h2>[slug]/+page.svelte</h2> -->
 
 <!-- Show loading message if currentStepIndex is -1, otherwise show the StepperComponent -->
 {#if currentStepIndex === -1}
     <ContainerSlot><h2>LOADING...</h2></ContainerSlot>
 {:else}
     <!-- Pass the validated step number to the StepperComponent -->
-    <StepperComponent params={currentStepIndex} />
+    <StepperWrapper params={currentStepIndex} />
 {/if}
