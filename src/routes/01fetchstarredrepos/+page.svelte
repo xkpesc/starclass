@@ -2,7 +2,7 @@
     import { getStarredRepos, logIndexedDBEntries } from "$lib/GitHubStarredRepos";
     import ContainerSlot from "$lib/ContainerSlot.svelte";
     import { onMount } from "svelte";
-    import { ProgressRadial } from "@skeletonlabs/skeleton";
+    import { ProgressRadial, SlideToggle } from "@skeletonlabs/skeleton";
     import { writable } from "svelte/store";
 
     let progressMessage = writable("Click 'Get Starred Repos' to begin");
@@ -40,4 +40,9 @@
     {/if}
 
     <p>{$progressMessage}</p>
+
+    <!-- TODO: models preload -->
+    <SlideToggle name="preload_models" active="bg-primary-500" checked>Preload Models</SlideToggle>
+    <p>The toggle above will preload {'<'}llm_model{'>'} and {'<'}embeddings_models{'>'} <br>
+    You can also change the models settings later.</p>
 </ContainerSlot>

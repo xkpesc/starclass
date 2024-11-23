@@ -4,8 +4,13 @@
     import { Stepper, Step } from '@skeletonlabs/skeleton';
 
     import GithubAuth from '../routes/00githubauth/+page.svelte';
-    import Loadrepos from '../routes/01githubload/+page.svelte'
+    import FetchStarredRepos from '../routes/01fetchstarredrepos/+page.svelte'
     import SelectRepos from '../routes/02selectrepos/+page.svelte';
+    import FetchReadmes from '../routes/03fetchreadmes/+page.svelte';
+    import LoadModels from '../routes/04loadmodels/+page.svelte';
+    import GenDescriptions from '../routes/05gendescriptions/+page.svelte';
+    import GenEmbeddings from '../routes/06genembeddings/+page.svelte';
+    import Done from '../routes/07done/+page.svelte';
     
     import DummyStep from '../routes/99dummy/+page.svelte';
 
@@ -28,12 +33,13 @@
     // Define the steps with their corresponding components
     export const steps = [
         { path: 'step1', header: 'Github Authentication', component: GithubAuth },
-        { path: 'step2', header: 'Loading Github Starred Repos', component: Loadrepos },
+        { path: 'step2', header: 'Loading Github Starred Repos', component: FetchStarredRepos },
         { path: 'step3', header: 'Select the repos you want to index', component: SelectRepos },
-        { path: 'step4', header: 'Loading AI models...', component: DummyStep },
-        { path: 'step5', header: '<placeholder>', component: DummyStep },
-        { path: 'step6', header: '<placeholder>', component: DummyStep },
-        { path: 'step7', header: '<placeholder>', component: DummyStep },
+        { path: 'step4', header: 'Loading AI models...', component: FetchReadmes },
+        { path: 'step5', header: '<LoadModels>', component: LoadModels },
+        { path: 'step6', header: '<GenDescriptions>', component: GenDescriptions },
+        { path: 'step7', header: '<GenEmbeddings>', component: GenEmbeddings },
+        { path: 'step8', header: '<Done>', component: Done },
     ];
 
 
@@ -71,7 +77,7 @@
                         {#each steps as { header, component }, i}
                         
                             <Step class="h-full flex flex-col items-stretch justify-between p-10"
-                            regionHeader="flex-initial"
+                            regionHeader="flex-initial self-center"
                             regionContent="overflow-hidden flex-initial"
                             regionNavigation="flex-initial pt-4">
                                 <svelte:fragment slot="header">{header}</svelte:fragment>
@@ -92,7 +98,7 @@
         height: 2500px;
     }
     .debugred{
-        border: 2px solid red;
+        border: 2px dotted red;
         box-sizing: border-box;
     }
     .debugblue{

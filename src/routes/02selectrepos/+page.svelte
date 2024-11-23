@@ -48,7 +48,7 @@ File: src/routes/02selectrepos/+page.svelte
 </script>
 
 <!-- <ContainerSlot> -->
-    <h2 class="h4">GitHub Starred Repositories</h2>
+    <p class="p text-center">{checkedNodes.length} selected starred repositories</p>
     <!-- TODO delayed: add quick search -->
      
     <div class="h-full overflow-auto">
