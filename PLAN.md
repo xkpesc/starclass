@@ -17,6 +17,8 @@
 
 - Migrate to svelte5, since it was needed to downgrade to svelte4 because of skeleton TreeViews: https://github.com/skeletonlabs/skeleton/issues/2502
 
+- Svelte + CSP: https://svelte.dev/docs/kit/configuration#csp
+
 
 
 
