@@ -35,7 +35,7 @@
         { path: 'step1', header: 'Github Authentication', component: GithubAuth },
         { path: 'step2', header: 'Loading Github Starred Repos', component: FetchStarredRepos },
         { path: 'step3', header: 'Select the repos you want to index', component: SelectRepos },
-        { path: 'step4', header: 'Loading AI models...', component: FetchReadmes },
+        { path: 'step4', header: '<FetchReadmes>', component: FetchReadmes },
         { path: 'step5', header: '<LoadModels>', component: LoadModels },
         { path: 'step6', header: '<GenDescriptions>', component: GenDescriptions },
         { path: 'step7', header: '<GenEmbeddings>', component: GenEmbeddings },
