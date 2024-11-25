@@ -1,4 +1,10 @@
-import { getOctokitInstance } from "./GitHubAuth";
+/*
+========================================
+File: GithubStarredRepos.ts
+========================================
+*/
+
+import { getOctokitInstance } from "./GithubAuth";
 import { openDB, type IDBPDatabase } from "idb";
 
 const README_STORE = "readmes";
@@ -114,6 +120,8 @@ export async function loadStarredReposFromDB(): Promise<any[]> {
 // Process README files for all repositories
 export async function processReadmes(repos: any[]): Promise<void> {
     await ensureDBInitialized();
+    console.log(`processReadmes ${repos.length}`);
+    console.log(repos)
     const existingRepos = await loadStarredReposFromDB();
     const existingRepoMap = new Map(existingRepos.map((repo) => [repo.name, repo]));
 
@@ -147,6 +155,7 @@ export async function processReadmes(repos: any[]): Promise<void> {
 
 // Fetch README or its variations from a repository
 async function fetchReadmeWithFileName(owner: string, repo: string): Promise<{ content: string | null; originalReadmeName: string | null }> {
+    console.log(`fetchReadmeWithFileName`)
     const octokit = getOctokitInstance();
     for (const filePath of possiblePaths) {
         try {
@@ -198,3 +207,10 @@ export async function logIndexedDBEntries(): Promise<any[]> {
     console.log("IndexedDB Entries - STARS_STORE:", starsEntries);
     return [...readmeEntries, ...starsEntries];
 }
+
+
+/*
+========================================
+End of File: GithubStarredRepos.ts
+========================================
+*/

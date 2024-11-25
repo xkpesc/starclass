@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { getTokenFromLocalStorage, saveToken } from "$lib/GitHubAuth";
-  import { getStarredRepos } from "$lib/GitHubStarredRepos";
+  import { getTokenFromLocalStorage, saveToken } from "$lib/GithubAuth";
+  import { getStarredRepos } from "$lib/GithubStarredRepos";
   import ContainerSlot from "$lib/ContainerSlot.svelte";
   import { onMount } from "svelte";
 

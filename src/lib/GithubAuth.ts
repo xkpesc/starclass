@@ -1,9 +1,11 @@
 /*
 ========================================
-File: GitHubAuth.ts
+File: GithubAuth.ts
 ========================================
 */
 
+
+// TODO: Rename this file to GHTokenManager.ts
 // GitHub OAuth configuration and authentication
 import { Octokit } from "@octokit/core";
 
@@ -47,6 +49,6 @@ export function getOctokitInstance(): Octokit {
 
 /*
 ========================================
-End of File: GitHubAuth.ts
+End of File: GithubAuth.ts
 ========================================
 */
