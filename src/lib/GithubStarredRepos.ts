@@ -73,6 +73,7 @@ export async function* getStarredRepos(page: number = 1, page_end: number = -1):
                 starred_at: repo.starred_at,
                 language: repo.repo.language,
                 github_readme: null, // Initialize with null on first download
+                selected: false, // New field to indicate selection status
             }));
             yield { status: `Page ${page}: fetched ${repos.length} repos` };
 
