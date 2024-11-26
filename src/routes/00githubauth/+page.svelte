@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { getTokenFromLocalStorage, saveToken } from "$lib/GitHubAuth";
-  import { getStarredRepos } from "$lib/GitHubStarredRepos";
+  import { getTokenFromLocalStorage, saveToken } from "$lib/GithubAuth";
+  import { getStarredRepos } from "$lib/GithubStarredRepos";
   import ContainerSlot from "$lib/ContainerSlot.svelte";
   import { onMount } from "svelte";
 
@@ -21,7 +21,7 @@
   <h1>GitHub Token Input</h1>
   <input
     class="input"
-    type="text"
+    type="password"
     bind:value={githubToken}
     placeholder="Enter GitHub Token"
   />

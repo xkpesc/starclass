@@ -1,7 +1,6 @@
 <script>
-    import { getStarredRepos, logIndexedDBEntries } from "$lib/GitHubStarredRepos";
+    import { getStarredRepos, logIndexedDBEntries } from "$lib/GithubStarredRepos";
     import ContainerSlot from "$lib/ContainerSlot.svelte";
-    import { onMount } from "svelte";
     import { ProgressRadial, SlideToggle } from "@skeletonlabs/skeleton";
     import { writable } from "svelte/store";
 
