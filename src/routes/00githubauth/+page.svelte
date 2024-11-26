@@ -21,7 +21,7 @@
   <h1>GitHub Token Input</h1>
   <input
     class="input"
-    type="text"
+    type="password"
     bind:value={githubToken}
     placeholder="Enter GitHub Token"
   />

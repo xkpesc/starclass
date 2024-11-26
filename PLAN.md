@@ -19,7 +19,7 @@
 
 - Svelte + CSP: https://svelte.dev/docs/kit/configuration#csp
 
-
+- Use octokit to get the root file list of each repo and find the Readme file (instead of using hardcoded ones)
 
 
 # RESOURCES:

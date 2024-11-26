@@ -51,11 +51,16 @@ async function getLastStarredRepo(): Promise<string | null> {
 }
 
 // Main function to get starred repos with a stopping point based on the last fetch
-export async function* getStarredRepos(page: number = 1, page_end: number = -1): AsyncGenerator<{ status: string }, void, unknown> {
+export async function* getStarredRepos(page: number = 1, page_end: number = -1, abortController?: AbortController): AsyncGenerator<{ status: string, repos?: any[] }, void, unknown> {
     const octokit = getOctokitInstance();
     const stopAt = await getLastStarredRepo();
     try {
         while (true) {
+            if (abortController?.signal.aborted) {
+                yield { status: "Operation aborted by user." };
+                return;
+            }
+
             const response = await octokit.request("GET /user/starred", {
                 per_page: 100,
                 page: page,
@@ -67,20 +72,19 @@ export async function* getStarredRepos(page: number = 1, page_end: number = -1):
             });
             const repos = response.data.map((repo: any) => ({
                 id: repo.repo.id,
-                name: repo.repo.full_name,
+                full_name: repo.repo.full_name,
                 description: repo.repo.description,
                 url: repo.repo.html_url,
                 starred_at: repo.starred_at,
                 language: repo.repo.language,
-                github_readme: null, // Initialize with null on first download
-                selected: false, // New field to indicate selection status
+                github_readme_filename: null,
+                selected: true,
             }));
-            yield { status: `Page ${page}: fetched ${repos.length} repos` };
+            yield { status: `Page ${page}: fetched ${repos.length} repos`, repos };
 
             // Stop fetching if we've reached already fetched repos
             if (stopAt && repos.some((repo: any) => new Date(repo.starred_at) <= new Date(stopAt))) {
                 yield { status: "All new repos are up-to-date." };
-                //TODO delayed: yield the name and date of the last starred repo and show on UI
                 return;
             }
 
@@ -97,16 +101,32 @@ export async function* getStarredRepos(page: number = 1, page_end: number = -1):
     }
 }
 
-// Save starred repos to IndexedDB with duplicate check
+// Save or update starred repos to IndexedDB
 async function saveStarredReposToDB(repos: any[]): Promise<void> {
     await ensureDBInitialized();
     const tx = db!.transaction(STARS_STORE, "readwrite");
     const store = tx.objectStore(STARS_STORE);
 
     for (const repo of repos) {
-        await store.put({ id: repo.name, ...repo });
+        await store.put({ id: repo.id, full_name: repo.full_name, ...repo });
     }
-    console.log(`Saved ${repos.length} repos to IndexedDB in store ${STARS_STORE}.`);
+    console.log(`Saved or updated ${repos.length} repos to IndexedDB in store ${STARS_STORE}.`);
+}
+
+// Update selected repos in IndexedDB
+export async function updateSelectedReposInDB(selectedRepos: { id: string; selected: boolean }[]): Promise<void> {
+    await ensureDBInitialized();
+    const tx = db!.transaction(STARS_STORE, "readwrite");
+    const store = tx.objectStore(STARS_STORE);
+    for (const repo of selectedRepos) {
+        const existingRepo = await store.get(repo.id);
+        if (existingRepo) {
+            existingRepo.selected = repo.selected;
+            await store.put(existingRepo);
+        }
+    }
+
+    console.log(`Updated ${selectedRepos.length} repos with 'selected' field in IndexedDB.`);
 }
 
 // Load starred repos from IndexedDB
@@ -119,44 +139,51 @@ export async function loadStarredReposFromDB(): Promise<any[]> {
 }
 
 // Process README files for all repositories
-export async function processReadmes(repos: any[]): Promise<void> {
+export async function* processReadmes(repos: any[], abortController?: AbortController): AsyncGenerator<{ status: string, fetched?: number, total?: number }, void, unknown> {
     await ensureDBInitialized();
-    console.log(`processReadmes ${repos.length}`);
-    console.log(repos)
     const existingRepos = await loadStarredReposFromDB();
-    const existingRepoMap = new Map(existingRepos.map((repo) => [repo.name, repo]));
+    const existingRepoMap = new Map(existingRepos.map((repo) => [repo.id, repo]));
+
+    let fetched = 0;
+    const total = repos.length;
 
     for (const repo of repos) {
+        if (abortController?.signal.aborted) {
+            yield { status: "Operation aborted by user.", fetched, total };
+            return;
+        }
+
         const [owner, repoName] = repo.full_name.split("/");
 
-        // Skip repos where github_readme is already populated or marked as unavailable
-        if (existingRepoMap.has(repo.name) && existingRepoMap.get(repo.name).github_readme !== null) {
-            console.log(`Skipping ${repo.name} as README is already processed.`);
+        // Skip repos where github_readme_filename is already populated or marked as unavailable
+        if (existingRepoMap.has(repo.id) && existingRepoMap.get(repo.id).github_readme_filename !== null) {
+            console.log(`Skipping ${repo.full_name} as README is already processed.`)
+            yield { status: `Skipping ${repo.full_name} as README is already processed.`, fetched, total };
             continue;
         }
 
         const { content, originalReadmeName } = await fetchReadmeWithFileName(owner, repoName);
         if (content) {
-            const savedFileName = await saveReadmeToFile(owner, repoName, content);
-            repo.readme_file = savedFileName;
-            repo.github_readme = originalReadmeName;
+            const savedFileName = await saveReadmeToDB(repo.id, repo.full_name, content);
+            repo.github_readme_filename = originalReadmeName;
         } else {
-            repo.github_readme = false; // Mark as not available
+            repo.github_readme_filename = false;
         }
+        fetched++;
+
+        // Update the IndexedDB with the readme filename immediately after processing each repo
+        const tx = db!.transaction(STARS_STORE, "readwrite");
+        const store = tx.objectStore(STARS_STORE);
+        await store.put({ id: repo.id, full_name: repo.full_name, ...repo });
+
+        yield { status: `Processed README for ${repo.full_name}`, fetched, total };
     }
 
-    // Update the IndexedDB with readme filenames and github_readme field
-    const tx = db!.transaction(STARS_STORE, "readwrite");
-    const store = tx.objectStore(STARS_STORE);
-    for (const repo of repos) {
-        await store.put({ id: repo.name, ...repo });
-    }
-    console.log(`Updated ${STARS_STORE} with README information`);
+    yield { status: `Processing complete.`, fetched, total };
 }
 
 // Fetch README or its variations from a repository
 async function fetchReadmeWithFileName(owner: string, repo: string): Promise<{ content: string | null; originalReadmeName: string | null }> {
-    console.log(`fetchReadmeWithFileName`)
     const octokit = getOctokitInstance();
     for (const filePath of possiblePaths) {
         try {
@@ -184,11 +211,11 @@ async function fetchReadmeWithFileName(owner: string, repo: string): Promise<{ c
 }
 
 // Save README content to IndexedDB
-async function saveReadmeToFile(owner: string, repoName: string, content: string): Promise<string> {
+async function saveReadmeToDB(repoId: string, fullName: string, content: string): Promise<string> {
     await ensureDBInitialized();
-    const fileName = `${owner}+${repoName}.md`;
-    await db!.put(README_STORE, { id: fileName, content });
-    console.log(`Saved README for ${owner}/${repoName} to IndexedDB in store ${README_STORE}.`);
+    const fileName = repoId;
+    await db!.put(README_STORE, { id: fileName, full_name: fullName, content });
+    console.log(`Saved README for ${fullName} to IndexedDB in store ${README_STORE}.`);
     return fileName;
 }
 
@@ -208,7 +235,6 @@ export async function logIndexedDBEntries(): Promise<any[]> {
     console.log("IndexedDB Entries - STARS_STORE:", starsEntries);
     return [...readmeEntries, ...starsEntries];
 }
-
 
 /*
 ========================================
