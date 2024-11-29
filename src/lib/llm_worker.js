@@ -1,3 +1,9 @@
+
+// ========================================
+// File: src/lib/llm_worker.js
+// ========================================
+
+
 import {
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -33,6 +39,7 @@ import {
   
   let past_key_values_cache = null;
   async function generate(messages) {
+    console.log(messages)
     // Retrieve the text-generation pipeline.
     const [tokenizer, model] = await TextGenerationPipeline.getInstance();
   
@@ -52,6 +59,7 @@ import {
       }
     };
     const callback_function = (output) => {
+      console.log(output)
       self.postMessage({
         status: "update",
         output,
@@ -78,7 +86,7 @@ import {
       // Sampling
       do_sample: false,
   
-      max_new_tokens: 1024,
+      max_new_tokens: 256,
       streamer,
       stopping_criteria,
       return_dict_in_generate: true,
@@ -129,15 +137,16 @@ import {
     });
   
     // Run model with dummy input to compile shaders
-    // const inputs = tokenizer("a");
-    // await model.generate({ ...inputs, max_new_tokens: 1 });
-    // self.postMessage({ status: "ready" });
+    const inputs = tokenizer("a");
+    await model.generate({ ...inputs, max_new_tokens: 1 });
+    console.log('ready')
+    self.postMessage({ status: "ready" });
   }
   // Listen for messages from the main thread
   self.addEventListener("message", async (e) => {
-    const { type, data } = e.data;
+    const { type, messages } = e.data;
 
-    console.log(`llm_worker: ${type} + ${data}`)
+    console.log(`llm_worker: ${type} + ${messages}`)
   
     switch (type) {
       case "check":
@@ -150,7 +159,7 @@ import {
   
       case "generate":
         stopping_criteria.reset();
-        generate(data);
+        generate(messages);
         break;
   
       case "interrupt":
@@ -164,3 +173,8 @@ import {
     }
   });
   
+
+
+// ========================================
+// End of: src/lib/llm_worker.js
+// ========================================

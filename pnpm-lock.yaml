@@ -14,9 +14,6 @@ importers:
       '@octokit/core':
         specifier: ^6.1.2
         version: 6.1.2
-      '@webgpu/types':
-        specifier: ^0.1.51
-        version: 0.1.51
       idb:
         specifier: ^8.0.0
         version: 8.0.0
@@ -45,6 +42,9 @@ importers:
       '@types/node':
         specifier: 22.9.0
         version: 22.9.0
+      '@webgpu/types':
+        specifier: ^0.1.51
+        version: 0.1.51
       autoprefixer:
         specifier: 10.4.20
         version: 10.4.20(postcss@8.4.49)
