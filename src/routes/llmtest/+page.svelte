@@ -1,177 +1,125 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import Worker from '$lib/llm_worker?worker';
-  import { ProgressBar } from '@skeletonlabs/skeleton';
-
-  let IS_WEBGPU_AVAILABLE = false;
-  let worker = null;
-  let input = '';
-  let messages = [];
-  let tps = null;
-  let numTokens = null;
-  let isRunning = false;
-  let status = null;
-  let error = null;
-  let loadingMessage = '';
-  let progressItems = [];
-
-  let textareaRef = null;
-  let chatContainerRef = null;
-
-  const STICKY_SCROLL_THRESHOLD = 120;
-  const EXAMPLES = [
-    'Give me some tips to improve my time management skills.',
-    'What is the difference between AI and ML?',
-    'Write python code to compute the nth fibonacci number.',
-  ];
-
-  const resizeInput = () => {
-    if (!textareaRef) return;
-    textareaRef.style.height = 'auto';
-    textareaRef.style.height = `${Math.min(
-      Math.max(textareaRef.scrollHeight, 24),
-      200
-    )}px`;
-  };
-
-  const onEnter = (message) => {
-    messages = [...messages, { role: 'user', content: message }];
-    tps = null;
-    isRunning = true;
-    input = '';
-  };
-
-  const onInterrupt = () => {
-    worker.postMessage({ type: 'interrupt' });
-  };
-
-  const scrollToBottom = () => {
-    if (
-      chatContainerRef &&
-      chatContainerRef.scrollHeight - chatContainerRef.scrollTop - chatContainerRef.clientHeight < STICKY_SCROLL_THRESHOLD
-    ) {
-      chatContainerRef.scrollTop = chatContainerRef.scrollHeight;
+  import * as webllm from "@mlc-ai/web-llm";
+  import appConfig from "$lib/app-config";
+  import Worker from '$lib/webllm_worker?worker';
+  import { onMount } from "svelte";
+  import { writable } from 'svelte/store';
+  
+  let useWebWorker = appConfig.use_web_worker;
+  let engine: webllm.MLCEngineInterface;
+  let selectedModel: string = "default-model";
+  let modelList = appConfig.model_list;
+  let modelSelected = writable(selectedModel);
+  let initProgressMessage = writable("");
+  let chatHistory: webllm.ChatCompletionMessageParam[] = [];
+  let requestInProgress = false;
+  let userPrompt = "";
+  
+  // A function to initialize the webllm engine and inform us about the process
+  async function initializeEngine() {
+    console.log("Initializing engine...");
+    try {
+      if (!engine) {
+        if (useWebWorker) {
+          console.log("Using WebWorker engine...");
+          const initProgressCallback = (progress) => {
+            console.log("Initialization progress:", progress);
+            initProgressMessage.set(progress.text);
+          };
+          engine = new webllm.WebWorkerMLCEngine(
+            new Worker(),
+            { appConfig, logLevel: "INFO" },
+          );
+          engine.setInitProgressCallback(initProgressCallback);
+        } else {
+          console.log("Using normal MLCEngine...");
+          engine = new webllm.MLCEngine({ appConfig });
+        }
+      }
+      
+      // Check GPU vendor and device capability
+      console.log("Fetching device capabilities...");
+      const [maxStorageBufferBindingSize, gpuVendor] = await Promise.all([
+        engine.getMaxStorageBufferBindingSize(),
+        engine.getGPUVendor(),
+      ]);
+      console.log("Max Storage Buffer Binding Size:", maxStorageBufferBindingSize);
+      console.log("GPU Vendor:", gpuVendor);
+  
+      console.log("Initializing chat capabilities...");
+      await engine.resetChat();
+      console.log("Chat initialized successfully");
+    } catch (err) {
+      console.error("Initialization failed:", err);
+      initProgressMessage.set("Initialization failed: " + err.message);
     }
-  };
-
-  const handleWorkerMessage = (e) => {
-    switch (e.data.status) {
-      case 'loading':
-        status = 'loading';
-        loadingMessage = e.data.data;
-        break;
-      case 'initiate':
-        progressItems = [...progressItems, e.data];
-        break;
-      case 'progress':
-        progressItems = progressItems.map((item) =>
-          item.file === e.data.file ? { ...item, ...e.data } : item
-        );
-        break;
-      case 'done':
-        progressItems = progressItems.filter((item) => item.file !== e.data.file);
-        break;
-      case 'ready':
-        status = 'ready';
-        break;
-      case 'start':
-        messages = [...messages, { role: 'assistant', content: '' }];
-        break;
-      case 'update':
-        const { output, tps: newTps, numTokens: newNumTokens } = e.data;
-        tps = newTps;
-        numTokens = newNumTokens;
-        messages = messages.map((msg, idx) =>
-          idx === messages.length - 1
-            ? { ...msg, content: msg.content + output }
-            : msg
-        );
-        break;
-      case 'complete':
-        isRunning = false;
-        break;
-      case 'error':
-        error = e.data.data;
-        break;
+  }
+  
+  // React to model selection changes
+  async function onModelChange(event) {
+    selectedModel = event.target.value;
+    console.log("Model changed to:", selectedModel);
+    try {
+      console.log(`Reloading model: ${selectedModel}`);
+      await engine.reload(selectedModel);
+      console.log("Model reloaded successfully");
+    } catch (err) {
+      console.error("Model reload failed:", err);
+      initProgressMessage.set("Model reload failed: " + err.message);
     }
-  };
+  }
 
-  onMount(() => {
-    IS_WEBGPU_AVAILABLE = !!navigator.gpu;
-    worker = new Worker;
-    worker.postMessage({ type: 'check' });
+  // A function to generate text based on user input
+  async function generateText() {
+    if (requestInProgress) {
+      console.log("Request already in progress, please wait.");
+      return;
+    }
+    if (!userPrompt) {
+      console.log("Prompt is empty, nothing to generate.");
+      return;
+    }
+    
+    console.log("Generating text for prompt:", userPrompt);
+    chatHistory.push({ role: "user", content: userPrompt });
+    requestInProgress = true;
 
-    worker.addEventListener('message', handleWorkerMessage);
+    try {
+      let curMessage = "";
+      const completion = await engine.chat.completions.create({
+        stream: true,
+        messages: chatHistory,
+        stream_options: { include_usage: true },
+      });
+      for await (const chunk of completion) {
+        const curDelta = chunk.choices[0]?.delta.content;
+        if (curDelta) {
+          curMessage += curDelta;
+        }
+        console.log("Current response:", curMessage);
+      }
+      const finalMessage = await engine.getMessage();
+      console.log("Final response:", finalMessage);
+      chatHistory.push({ role: "assistant", content: finalMessage });
+    } catch (err) {
+      console.error("Generate error:", err);
+    }
+    requestInProgress = false;
+  }
 
-    return () => {
-      worker.removeEventListener('message', handleWorkerMessage);
-      worker.terminate();
-    };
-  });
-
-  $: scrollToBottom();
+  onMount(initializeEngine);
 </script>
 
-<div class="flex flex-col h-screen mx-auto text-gray-800 dark:text-gray-200 bg-white dark:bg-gray-900">
-  {#if status === null && messages.length === 0}
-    <div class="flex justify-center items-center h-full">
-      <div class="text-center">
-        <h1 class="text-4xl font-bold">Llama-3.2 WebGPU</h1>
-        <p>A private and powerful AI chatbot that runs locally in your browser.</p>
-        {#if error}
-          <p class="text-red-500">{error}</p>
-        {/if}
-        <button
-          class="bg-blue-400 text-white px-4 py-2 rounded-lg"
-          on:click={() => worker.postMessage({ type: 'load' })}
-          disabled={status !== null || error}
-        >
-          Load model
-        </button>
-      </div>
-    </div>
-  {/if}
+<select on:change={onModelChange} bind:value={$modelSelected}>
+  {#each modelList as model}
+    <option value={model.model_id} selected={model.model_id === selectedModel}>
+      {model.model_id}
+    </option>
+  {/each}
+</select>
 
-  {#if status === 'loading'}
-    <div class="w-full max-w-md mx-auto p-4">
-      <p>{loadingMessage}</p>
-      {#each progressItems as { file, loaded, total }}
-        <div>
-          {file}: {Math.round((loaded / total) * 100)}%
-          <ProgressBar value={loaded} max={total} />
-          <span>{(loaded / (1024 * 1024)).toFixed(2)}MB / {(total / (1024 * 1024)).toFixed(2)}MB</span>
-        </div>
-      {/each}
-    </div>
-  {/if}
+<p>Selected model: {$modelSelected}</p>
+<p>Initialization progress: {$initProgressMessage}</p>
 
-  {#if status === 'ready'}
-    <div bind:this={chatContainerRef} class="flex-grow overflow-y-auto">
-      {#each messages as { role, content }}
-        <div>{role}: {content}</div>
-      {/each}
-    </div>
-
-    <textarea
-      bind:this={textareaRef}
-      class="w-full p-2 border"
-      placeholder="Type your message..."
-      bind:value={input}
-      on:input={resizeInput}
-      disabled={status !== 'ready'}
-      on:keydown={(e) => {
-        if (e.key === 'Enter' && !e.shiftKey && input.trim()) {
-          e.preventDefault();
-          onEnter(input);
-        }
-      }}
-    ></textarea>
-    <button class="bg-green-400 px-4 py-2" on:click={() => onEnter(input)}>
-      Send
-    </button>
-  {/if}
-
-  {#if !IS_WEBGPU_AVAILABLE}
-    <div>WebGPU is not supported by this browser.</div>
-  {/if}
-</div>
+<input type="text" bind:value={userPrompt} placeholder="Enter your message..." />
+<button on:click={generateText}>Generate</button>
