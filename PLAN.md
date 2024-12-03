@@ -21,6 +21,8 @@
 
 - Use octokit to get the root file list of each repo and find the Readme file (instead of using hardcoded ones)
 
+- Migrate to https://github.com/mlc-ai/web-llm ?
+
 
 # RESOURCES:
 
