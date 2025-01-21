@@ -39,6 +39,28 @@ async function ensureDBInitialized(): Promise<void> {
     }
 }
 
+// Function to get N READMEs from the IndexedDB
+export async function getReadmes(limit: number = 0): Promise<any[]> {
+    await ensureDBInitialized();
+    const tx = db!.transaction(README_STORE, "readonly");
+    const store = tx.objectStore(README_STORE);
+    const readmes: any[] = [];
+    
+    let cursor = await store.openCursor();
+    let count = 0;
+
+    while (cursor) {
+        readmes.push(cursor.value);
+        count++;
+        if (limit > 0 && count >= limit) {
+            break;
+        }
+        cursor = await cursor.continue();
+    }
+
+    return readmes;
+}
+
 // Load the last starred repo timestamp to determine the point to resume fetching
 async function getLastStarredRepo(): Promise<string | null> {
     await ensureDBInitialized();

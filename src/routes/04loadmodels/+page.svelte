@@ -1,146 +1,153 @@
 <!-- 
 ========================================
-File: src/routes/04loadmodels/+page.svelte
+End of File: src/routes/04loadmodels/+page.svelte
 ========================================
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import Worker from '$lib/llm_worker?worker';
+  import { onMount, onDestroy } from 'svelte';
+  import * as webllm from '@mlc-ai/web-llm';
+  import { writable } from 'svelte/store';
+  import appConfig from '$lib/app-config';
+  import Worker from '$lib/webllm_worker?worker';
   import { ProgressBar } from '@skeletonlabs/skeleton';
 
-  let IS_WEBGPU_AVAILABLE = false;
-  let worker = null;
-  let input = '';
-  let messages = [];
-  let isRunning = false;
-  let status = null;
-  let loadingMessage = '';
-  let progressItems = [];
+  let useWebWorker = appConfig.use_web_worker;
+  let engine: webllm.MLCEngineInterface;
+  let selectedModel: string = appConfig.model_list[0]?.model_id || 'default-model';
+  let modelSelected = writable(selectedModel);
+  let initProgressMessage = writable('');
+  let cacheStatus = writable('Checking...');
+  let progressValue = writable(0);
+  let progressText = writable('Initializing...');
+  let lastDownloaded = 0;
+  let lastTime = Date.now();
 
-  let textareaRef = null;
-
-  const onEnter = (message) => {
-    messages = [...messages, { role: 'user', content: message }];
-    isRunning = true;
-    input = '';
-    worker.postMessage({ type: 'generate', messages });
-  };
-
-  const handleWorkerMessage = (e) => {
-    switch (e.data.status) {
-      case 'loading':
-        status = 'loading';
-        loadingMessage = e.data.data;
-        break;
-      case 'initiate':
-        progressItems = [...progressItems, e.data];
-        break;
-      case 'progress':
-        progressItems = progressItems.map((item) =>
-          item.file === e.data.file ? { ...item, ...e.data } : item
-        );
-        break;
-      case 'done':
-        progressItems = progressItems.filter((item) => item.file !== e.data.file);
-        if (progressItems.length === 0) {
-          status = 'ready';
-        }
-        break;
-      case 'ready':
-        status = 'ready';
-        break;
-      case 'start':
-        messages = [...messages, { role: 'assistant', content: '' }];
-        break;
-      case 'update':
-        const { output } = e.data;
-        messages = messages.map((msg, idx) =>
-          idx === messages.length - 1
-            ? { ...msg, content: msg.content + output }
-            : msg
-        );
-        break;
-      case 'complete':
-        isRunning = false;
-        break;
+  function extractProgress(text: string): number | null {
+    const match = text.match(/^Loading model from cache\[(\d+)\/(\d+)\]/);
+    if (match) {
+        const current = parseInt(match[1], 10);
+        const total = parseInt(match[2], 10);
+        return total > 0 ? (current / total) * 100 : 0;
     }
-  };
+    return null;
+  }
 
-  const loadModel = () => {
-    worker.postMessage({ type: 'load' });
-  };
+  function extractFetchProgress(text: string): string | null {
+    const match = text.match(/^Fetching param cache\[(\d+)\/(\d+)\]: (\d+)MB fetched/);
+    if (match) {
+        const downloaded = parseInt(match[3], 10);
+        const total = parseInt(match[2], 10) * downloaded / parseInt(match[1], 10); // Estimate total size
+        const currentTime = Date.now();
+        //TODO: speed is buggy because callback updates are at a non regular interval
+        const timeElapsed = (currentTime - lastTime) / 1000; // Convert to seconds
+        const speed = timeElapsed > 0 ? ((downloaded - lastDownloaded) / timeElapsed).toFixed(1) : '0.0';
+        lastDownloaded = downloaded;
+        lastTime = currentTime;
+        return `${downloaded}MB/${Math.round(total)}MB ~ ${speed}MB/s`;
+    }
+    return null;
+  }
 
-  onMount(() => {
-    worker = new Worker;
-    worker.postMessage({ type: 'check' });
-    worker.addEventListener('message', handleWorkerMessage);
+  async function checkCacheStatus() {
+    const isCached = await webllm.hasModelInCache(selectedModel, appConfig);
+    cacheStatus.set(isCached ? 'Model found in cache' : 'Model needs to be downloaded');
+  }
 
-    return () => {
-      worker.removeEventListener('message', handleWorkerMessage);
-      worker.terminate();
-    };
+  async function loadModel() {
+    console.log('Initializing MLC LLM engine...');
+    try {
+      if (!engine) {
+        if (useWebWorker) {
+          console.log('Using WebWorker engine...');
+          engine = new webllm.WebWorkerMLCEngine(new Worker(), { appConfig, logLevel: 'INFO' });
+        } else {
+          console.log('Using normal MLCEngine...');
+          engine = new webllm.MLCEngine({ appConfig });
+        }
+      }
+      engine.setInitProgressCallback((progress: webllm.InitProgressReport) => {
+        console.log('Initialization progress:', progress);
+        initProgressMessage.set(progress.text);
+        const extractedProgress = extractProgress(progress.text);
+        const extractedFetchProgress = extractFetchProgress(progress.text);
+        //TODO: messages when downloading a model are too verbosy
+        progressValue.set(extractedProgress !== null ? extractedProgress : progress.progress * 100);
+        progressText.set(extractedFetchProgress !== null ? extractedFetchProgress : progress.text);
+      });
+
+      await checkCacheStatus();
+
+      console.log(`Loading model: ${selectedModel}`);
+      await engine.reload(selectedModel);
+      console.log('Model loaded successfully');
+      cacheStatus.set('Model ready');
+    } catch (err) {
+      console.error('Initialization failed:', err);
+      initProgressMessage.set('Initialization failed: ' + err.message);
+    }
+  }
+
+  function onModelChange(event) {
+    selectedModel = event.target.value;
+    console.log('Model selected:', selectedModel);
+    checkCacheStatus();
+  }
+
+  async function deleteModelCache() {
+    try {
+      console.log(`Deleting model cache for: ${selectedModel}`);
+      await webllm.deleteModelAllInfoInCache(selectedModel, appConfig);
+      console.log('Cache deleted successfully');
+      cacheStatus.set('Cache cleared, model will need to be downloaded again');
+    } catch (err) {
+      console.error('Cache deletion failed:', err);
+    }
+  }
+
+  onMount(checkCacheStatus);
+
+  onDestroy(() => {
+    if (engine) {
+      console.log('Unloading engine...');
+      engine.unload();
+    }
   });
 </script>
 
-<div class="">
-  {#if status === null}
-    <div class="flex justify-center items-center h-full">
-      <div class="text-center">
-        <h1 class="text-4xl font-bold">Llama-3.2 WebGPU</h1>
-        <p>A private and powerful AI chatbot that runs locally in your browser.</p>
-        <button
-          class="btn variant-filled"
-          on:click={loadModel}
-          disabled={status !== null}
-        >
-          Load model
-        </button>
+<div class="container">
+  <h1 class="text-4xl font-bold">MLC-AI Web LLM Model Management</h1>
+  <p>Select, load, and manage models running locally in your browser.</p>
 
+  <select class="select" on:change={onModelChange} bind:value={$modelSelected}>
+    {#each appConfig.model_list as model}
+      <option value={model.model_id}>{model.model_id}</option>
+    {/each}
+  </select>
 
-      </div>
-    </div>
-  {/if}
+  <button class="btn variant-filled" on:click={loadModel}>Load Model</button>
+  <button class="btn variant-filled" on:click={deleteModelCache}>Clear Cache</button>
+  
+  <p>Cache Status: {$cacheStatus}</p>
+  <p>Initialization Progress: {$initProgressMessage}</p>
 
-  {#if status === 'loading'}
-    <div class="w-full max-w-md mx-auto p-4">
-      <p>{loadingMessage}</p>
-      {#each progressItems as { file, loaded, total }}
-        <div>
-          {file}: {Math.round((loaded / total) * 100)}%
-          <ProgressBar value={loaded} max={total} />
-          <span>{(loaded / (1024 * 1024)).toFixed(2)}MB / {(total / (1024 * 1024)).toFixed(2)}MB</span>
-        </div>
-      {/each}
-    </div>
-  {/if}
-
-  {#if status === 'ready'}
-    <div class="flex-grow overflow-y-auto">
-      {#each messages as { role, content }}
-        <div>{role}: {content}</div>
-      {/each}
-    </div>
-
-    <textarea
-      bind:this={textareaRef}
-      class="input"
-      placeholder="Type your message..."
-      bind:value={input}
-      on:keydown={(e) => {
-        if (e.key === 'Enter' && !e.shiftKey && input.trim()) {
-          e.preventDefault();
-          onEnter(input);
-        }
-      }}
-    ></textarea>
-    <button class="btn variant-filled" on:click={() => onEnter(input)}>
-      Send
-    </button>
-  {/if}
+  <div class="progress-container">
+    <p>{$progressText}</p>
+    <ProgressBar value={$progressValue} max={100} />
+  </div>
 </div>
 
+<style>
+  .container {
+    max-width: 600px;
+    margin: auto;
+    text-align: center;
+  }
+  .progress-container {
+    margin-top: 20px;
+  }
+</style>
 <!-- 
 ========================================
-End of: src/routes/04loadmodels/+page.svelte
+End of File: src/routes/04loadmodels/+page.svelte
 ========================================
 -->

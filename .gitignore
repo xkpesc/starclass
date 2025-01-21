@@ -23,6 +23,7 @@ vite.config.ts.timestamp-*
 #starclass
 json_dev_files/
 readmes/
+deps/
 
 # Logs
 logs

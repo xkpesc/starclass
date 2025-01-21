@@ -30,8 +30,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@huggingface/transformers": "^3.0.2",
-    "@mlc-ai/web-llm": "^0.2.77",
+    "@mlc-ai/web-llm": "file:/home/marsch/starclass/deps/web-llm",
     "@octokit/core": "^6.1.2",
     "idb": "^8.0.0"
   }

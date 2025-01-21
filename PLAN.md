@@ -32,3 +32,37 @@ libSQL vector db: https://github.com/tursodatabase/libsql-client-ts/tree/main/ex
 browser-local LLMS:
 https://github.com/huggingface/transformers.js
 https://github.com/mlc-ai/web-llm
+
+
+# MLC-AI dependencies
+Web-llm for inferece on web-gpu works! But mlc-ai libraries on npmjs.com are outdated and
+installing them from a github url doesn't quite work because the `package.json` is in a subdir.
+I've tried using `pnpm` and which supports subdirectories on git urls, but it also has it's problems,
+pnpm would work like a charm if it actually used git to fetch the dependency packages, 
+but no matter how you specify the git url with git+ssh, git+https, etc prefixes, it always try to
+resolve to a codeload.github.com url[...].tar.gz, which doesn't contain git information (the .git folder),
+there's maybe a workaround if one would use a private github repo with "git+ssh" or other git hosting 
+service that doesn't support packing the repo contents to a tar.gz file (like maybe a gitea selfhosted) but
+is far from an elegant solution.
+There seems to be two (or three) ways to solve this:
+- restructure the mlc-ai repos by moving package.json files to their root, this way we can use npm, which 
+actually clones the repo, instead of fetching a tarball like pnpm
+- try to patch pnpm so it would always make a shallow clone from repos with git+ssh, or other pnpm option
+that would force git dependencies to be retrieved by git clone and not by tarball (cons: need to implement
+and wait for merge on the pnpm codebase): check isSsh() part on the typescript source code of pnpm, there's
+a regression/bug on the code that never evaluates git+ssh to use cloning, it will always resort to tarballs
+- run everything local with bash scripts to handle everything (faster but way less dynamic and not a best practice)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
