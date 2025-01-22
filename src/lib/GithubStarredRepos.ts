@@ -9,6 +9,8 @@ import { openDB, type IDBPDatabase } from "idb";
 
 const README_STORE = "readmes";
 const STARS_STORE = "stars";
+const DESCRIPTIONS_STORE = "descriptions";
+
 const possiblePaths: string[] = [
     "README.md",
     "README",
@@ -19,11 +21,19 @@ const possiblePaths: string[] = [
 
 let db: IDBPDatabase | undefined;
 
+// Initialize the IndexedDB with all required stores
 export async function initDB(): Promise<void> {
     db = await openDB("githubDB", 1, {
         upgrade(db) {
-            db.createObjectStore(README_STORE, { keyPath: "id" });
-            db.createObjectStore(STARS_STORE, { keyPath: "id" });
+            if (!db.objectStoreNames.contains(README_STORE)) {
+                db.createObjectStore(README_STORE, { keyPath: "id" });
+            }
+            if (!db.objectStoreNames.contains(STARS_STORE)) {
+                db.createObjectStore(STARS_STORE, { keyPath: "id" });
+            }
+            if (!db.objectStoreNames.contains(DESCRIPTIONS_STORE)) {
+                db.createObjectStore(DESCRIPTIONS_STORE, { keyPath: "id" });
+            }
         },
     });
 }
@@ -34,8 +44,12 @@ async function ensureDBInitialized(): Promise<void> {
         await initDB();
     }
     const dbStores = db!.objectStoreNames;
-    if (!dbStores.contains(README_STORE) || !dbStores.contains(STARS_STORE)) {
-        await initDB();
+    const requiredStores = [README_STORE, STARS_STORE, DESCRIPTIONS_STORE];
+    for (const store of requiredStores) {
+        if (!dbStores.contains(store)) {
+            await initDB();
+            break;
+        }
     }
 }
 
@@ -105,7 +119,7 @@ export async function* getStarredRepos(page: number = 1, page_end: number = -1, 
             yield { status: `Page ${page}: fetched ${repos.length} repos`, repos };
 
             // Stop fetching if we've reached already fetched repos
-            if (stopAt && repos.some((repo: any) => new Date(repo.starred_at) <= new Date(stopAt))) {
+            if (stopAt && repos.some((r: any) => new Date(r.starred_at) <= new Date(stopAt))) {
                 yield { status: "All new repos are up-to-date." };
                 return;
             }
@@ -124,7 +138,7 @@ export async function* getStarredRepos(page: number = 1, page_end: number = -1, 
 }
 
 // Save or update starred repos to IndexedDB
-async function saveStarredReposToDB(repos: any[]): Promise<void> {
+export async function saveStarredReposToDB(repos: any[]): Promise<void> {
     await ensureDBInitialized();
     const tx = db!.transaction(STARS_STORE, "readwrite");
     const store = tx.objectStore(STARS_STORE);
@@ -233,7 +247,7 @@ async function fetchReadmeWithFileName(owner: string, repo: string): Promise<{ c
 }
 
 // Save README content to IndexedDB
-async function saveReadmeToDB(repoId: string, fullName: string, content: string): Promise<string> {
+export async function saveReadmeToDB(repoId: string, fullName: string, content: string): Promise<string> {
     await ensureDBInitialized();
     const fileName = repoId;
     await db!.put(README_STORE, { id: fileName, full_name: fullName, content });
@@ -241,7 +255,49 @@ async function saveReadmeToDB(repoId: string, fullName: string, content: string)
     return fileName;
 }
 
-// Debug function to check if everything is OK with browser's indexeddb
+// Save generated descriptions to IndexedDB
+export async function saveDescriptions(
+    descriptions: {
+        id: string | number;
+        repo_name: string;
+        descriptions: string;
+        timestamp: string;
+    }[]
+): Promise<void> {
+    await ensureDBInitialized();
+    const tx = db!.transaction(DESCRIPTIONS_STORE, "readwrite");
+    const store = tx.objectStore(DESCRIPTIONS_STORE);
+
+    for (const desc of descriptions) {
+        await store.put(desc);
+    }
+
+    console.log(`Saved ${descriptions.length} descriptions to IndexedDB in store "${DESCRIPTIONS_STORE}".`);
+}
+
+// Get descriptions from IndexedDB
+export async function getDescriptions(limit: number = 0): Promise<any[]> {
+    await ensureDBInitialized();
+    const tx = db!.transaction(DESCRIPTIONS_STORE, "readonly");
+    const store = tx.objectStore(DESCRIPTIONS_STORE);
+    const descriptions: any[] = [];
+    
+    let cursor = await store.openCursor();
+    let count = 0;
+
+    while (cursor) {
+        descriptions.push(cursor.value);
+        count++;
+        if (limit > 0 && count >= limit) {
+            break;
+        }
+        cursor = await cursor.continue();
+    }
+
+    return descriptions;
+}
+
+// Debug function to check if everything is OK with browser's IndexedDB
 export async function logIndexedDBEntries(): Promise<any[]> {
     await ensureDBInitialized();
 
@@ -253,9 +309,14 @@ export async function logIndexedDBEntries(): Promise<any[]> {
     const storeStars = txStars.objectStore(STARS_STORE);
     const starsEntries: any[] = await storeStars.getAll();
 
+    const txDescriptions = db!.transaction(DESCRIPTIONS_STORE, "readonly");
+    const storeDescriptions = txDescriptions.objectStore(DESCRIPTIONS_STORE);
+    const descriptionEntries: any[] = await storeDescriptions.getAll();
+
     console.log("IndexedDB Entries - README_STORE:", readmeEntries);
     console.log("IndexedDB Entries - STARS_STORE:", starsEntries);
-    return [...readmeEntries, ...starsEntries];
+    console.log("IndexedDB Entries - DESCRIPTIONS_STORE:", descriptionEntries);
+    return [...readmeEntries, ...starsEntries, ...descriptionEntries];
 }
 
 /*
