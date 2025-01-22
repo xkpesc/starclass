@@ -7,8 +7,9 @@ File: src/routes/03fetchreadmes/+page.svelte
     import { onMount } from "svelte";
     import { writable } from "svelte/store";
     import { ProgressRadial, ProgressBar } from "@skeletonlabs/skeleton";
-    import { processReadmes, loadStarredReposFromDB } from "$lib/GithubStarredRepos";
+    import { processReadmes} from "$lib/GithubStarredRepos";
     import ContainerSlot from "$lib/ContainerSlot.svelte";
+    import { loadStarredReposFromDB } from "$lib/IDBUtils";
 
     let progressMessage = writable("Click 'Fetch README Files' to start");
     let loading = writable(false);

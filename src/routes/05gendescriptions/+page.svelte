@@ -9,13 +9,17 @@ File: src/routes/05gendescriptions/+page.svelte
   import { writable } from 'svelte/store';
   import appConfig from '$lib/app-config';
   import Worker from '$lib/webllm_worker?worker';
-  import { getReadmes, saveDescriptions } from "$lib/GithubStarredRepos";
+  import { getReadmes } from "$lib/IDBUtils";
+  import { saveDescriptions } from '$lib/DescriptionUtils';
 
   let useWebWorker = appConfig.use_web_worker;
   let engine: webllm.MLCEngineInterface;
   let requestInProgress = writable(false);
   let generatedDescriptions = writable<string[]>([]);
   let modelLoaded = writable(false);
+  let current_description = writable();
+
+  // TODO: figure out a way to abort the LLM run and re-run it if it hallucinates
 
   const jsonGrammarStr = String.raw`
     root ::= "{" ws "\"brief_description\":" ws brief_description "," ws "\"keywords\":" ws keywords "}"
@@ -81,7 +85,7 @@ File: src/routes/05gendescriptions/+page.svelte
         const completion = await engine.chat.completions.create({
           stream: true,
           messages: chatHistory,
-          stream_options: { include_usage: true },
+          // stream_options: { include_usage: true },
           response_format: {
             type: "grammar",
             grammar: jsonGrammarStr,
@@ -92,6 +96,7 @@ File: src/routes/05gendescriptions/+page.svelte
           const curDelta = chunk.choices[0]?.delta.content;
           if (curDelta) {
             curMessage += curDelta;
+            current_description.set(curMessage)
           }
         }
 
@@ -144,6 +149,11 @@ File: src/routes/05gendescriptions/+page.svelte
       Generate from READMEs
     {/if}
   </button>
+
+    <!-- TODO: show readme contents on left, show generated description on right -->
+    <div>
+      <pre>{$current_description}</pre>
+    </div>
 
   {#if $generatedDescriptions.length > 0}
     <div class="results">

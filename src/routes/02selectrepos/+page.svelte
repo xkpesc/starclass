@@ -7,7 +7,7 @@ File: src/routes/02selectrepos/+page.svelte
 <script lang="ts">
     import { RecursiveTreeView, TreeView, TreeViewItem, type TreeViewNode } from "@skeletonlabs/skeleton";
     import { onMount } from "svelte";
-    import { loadStarredReposFromDB, initDB, updateSelectedReposInDB } from "$lib/GithubStarredRepos";
+    import { loadStarredReposFromDB, initDB } from "$lib/IDBUtils";
     import ContainerSlot from "$lib/ContainerSlot.svelte";
     import { writable } from "svelte/store";
 
