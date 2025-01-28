@@ -10,13 +10,14 @@ File: src/routes/05gendescriptions/+page.svelte
   import appConfig from '$lib/app-config';
   import Worker from '$lib/webllm_worker?worker';
   import { getReadmes } from "$lib/IDBUtils";
-  import { saveDescriptions } from '$lib/DescriptionUtils';
+  import { saveDescriptions, getDescriptions } from '$lib/DescriptionUtils';
 
+  const defaultModel = "Llama-3.2-1B-Instruct-q4f32_1-MLC";
+  
   let useWebWorker = appConfig.use_web_worker;
-  let engine: webllm.MLCEngineInterface;
-  let requestInProgress = writable(false);
+  let engine: webllm.MLCEngineInterface | webllm.WebWorkerMLCEngine;
+
   let generatedDescriptions = writable<string[]>([]);
-  let modelLoaded = writable(false);
   let current_description = writable();
 
   // TODO: figure out a way to abort the LLM run and re-run it if it hallucinates
@@ -43,6 +44,29 @@ File: src/routes/05gendescriptions/+page.svelte
     \`\`\`.
   `;
 
+  // Add EngineState enum and engineState store
+  enum EngineState {
+    UNLOADED = 'UNLOADED',
+    LOADING = 'LOADING',
+    LOADED = 'LOADED',
+    GENERATING = 'GENERATING',
+    ABORTING = 'ABORTING',
+  }
+
+  let engineState = writable<EngineState>(EngineState.UNLOADED);
+
+  async function reloadModel() {
+    try {
+      engineState.set(EngineState.LOADING);
+      await engine.reload(defaultModel);
+      engineState.set(EngineState.LOADED);
+      console.log("Model reloaded successfully");
+    } catch (err) {
+      console.error("Model reload failed:", err);
+      engineState.set(EngineState.UNLOADED);
+    }
+  }
+
   async function initializeEngine() {
     console.log("Initializing engine...");
     try {
@@ -51,27 +75,32 @@ File: src/routes/05gendescriptions/+page.svelte
           ? new webllm.WebWorkerMLCEngine(new Worker(), { appConfig, logLevel: "INFO" })
           : new webllm.MLCEngine({ appConfig });
       }
-      // Load or reload your model
-      await engine.reload("Llama-3.2-1B-Instruct-q4f16_1-MLC");
-      console.log("Model loaded successfully");
-      modelLoaded.set(true);
+      await reloadModel();
     } catch (err) {
       console.error("Initialization failed:", err);
     }
   }
 
   async function generateTextFromReadmes() {
-    const readmes = await getReadmes(0); // or a limit if desired
+    if (!engine) {
+      await initializeEngine();
+    }
+    const readmes = await getReadmes(0);
     if (readmes.length === 0) {
       console.log("No READMEs found in IndexedDB.");
       return;
     }
 
-    requestInProgress.set(true);
-
+    engineState.set(EngineState.GENERATING);
     let descriptions: string[] = [];
 
     for (const readme of readmes) {
+      // Check if generation has been aborted
+      if ($engineState !== EngineState.GENERATING) {
+        console.log("Generation aborted.");
+        break; // Exit the loop if abort is requested
+      }
+
       console.log("Generating text for README:", readme.full_name);
       await engine.resetChat();
 
@@ -85,30 +114,80 @@ File: src/routes/05gendescriptions/+page.svelte
         const completion = await engine.chat.completions.create({
           stream: true,
           messages: chatHistory,
-          // stream_options: { include_usage: true },
           response_format: {
             type: "grammar",
             grammar: jsonGrammarStr,
           } as webllm.ResponseFormat,
         });
 
+        // Initialize watchdog variables
+        const initialTokens = 3;
+        let tokenCount = 0;
+        let tokenStartTimes: number[] = [];
+        let avgTimePerToken = 0;
+        let watchdogTimeout: ReturnType<typeof setTimeout> | null = null;
+
+        const startWatchdog = () => {
+          if (avgTimePerToken > 0) {
+            watchdogTimeout = setTimeout(() => {
+              console.warn("Watchdog timer triggered. Aborting generation due to potential hallucination.");
+              abortGeneration();
+            }, avgTimePerToken * 2); // Set timeout to twice the average time per token
+          }
+        };
+
+        const resetWatchdog = () => {
+          if (watchdogTimeout) {
+            clearTimeout(watchdogTimeout);
+            watchdogTimeout = null;
+          }
+          startWatchdog();
+        };
+
         for await (const chunk of completion) {
+          // Check if generation has been aborted
+          if ($engineState !== EngineState.GENERATING) {
+            console.log("Generation aborted during streaming.");
+            break; // Exit the streaming loop if abort is requested
+          }
+
+          const chunkStartTime = Date.now();
+
           const curDelta = chunk.choices[0]?.delta.content;
           if (curDelta) {
+            const tokenReceivedTime = Date.now();
+            if (tokenCount < initialTokens) {
+              const timeTaken = tokenReceivedTime - chunkStartTime;
+              tokenStartTimes.push(timeTaken);
+              if (tokenCount === initialTokens - 1) {
+                avgTimePerToken = tokenStartTimes.reduce((a, b) => a + b, 0) / initialTokens;
+                console.log(`Average time per token calculated: ${avgTimePerToken} ms`);
+                startWatchdog();
+              }
+            } else {
+              resetWatchdog();
+            }
+
+            tokenCount += 1;
             curMessage += curDelta;
-            current_description.set(curMessage)
+            current_description.set(curMessage);
           }
+        }
+
+        // Clear watchdog after successful generation
+        if (watchdogTimeout) {
+          clearTimeout(watchdogTimeout);
+          watchdogTimeout = null;
         }
 
         console.log("Generated description:", curMessage);
         descriptions.push(curMessage);
 
-        // Save this particular description to IndexedDB immediately
         const timestamp = new Date().toISOString();
         await saveDescriptions([{
-          id: readme.id,               // The same ID used for storing the readme
-          repo_name: readme.full_name,
-          descriptions: curMessage,    // The JSON string from the model
+          id: readme.id,
+          full_name: readme.full_name,
+          description: curMessage,
           timestamp
         }]);
 
@@ -117,9 +196,20 @@ File: src/routes/05gendescriptions/+page.svelte
       }
     }
 
-    // Update the reactive store with all descriptions that we've generated
     generatedDescriptions.set(descriptions);
-    requestInProgress.set(false);
+    engineState.set(EngineState.LOADED);
+  }
+
+  async function abortGeneration() {
+    console.log("Aborting generation...");
+    if ($engineState === EngineState.GENERATING) {
+      engineState.set(EngineState.ABORTING);
+      engine.interruptGenerate();
+      await engine.resetChat();
+      await engine.unload();
+      await reloadModel();
+      console.log("Generation aborted.");
+    }
   }
 
   onMount(initializeEngine);
@@ -138,20 +228,22 @@ File: src/routes/05gendescriptions/+page.svelte
 
   <button
     class="btn variant-filled"
-    on:click={generateTextFromReadmes}
-    disabled={!$modelLoaded || $requestInProgress}
+    on:click={() => ($engineState === EngineState.GENERATING ? abortGeneration() : generateTextFromReadmes())}
+    disabled={$engineState === EngineState.LOADING || $engineState === EngineState.ABORTING}
   >
-    {#if !$modelLoaded}
+    {#if $engineState === EngineState.LOADING}
       Loading model...
-    {:else if $requestInProgress}
-      Generating...
+    {:else if $engineState === EngineState.ABORTING}
+      Aborting...
+    {:else if $engineState === EngineState.GENERATING}
+      Abort Generation
     {:else}
       Generate from READMEs
     {/if}
   </button>
 
     <!-- TODO: show readme contents on left, show generated description on right -->
-    <div>
+    <div class="h-full overflow-y-auto">
       <pre>{$current_description}</pre>
     </div>
 
@@ -176,6 +268,7 @@ File: src/routes/05gendescriptions/+page.svelte
   text-align: left;
 }
 </style>
+
 <!-- 
 ========================================
 End of File: src/routes/05gendescriptions/+page.svelte
