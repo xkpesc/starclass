@@ -20,8 +20,8 @@ import {
   export async function saveDescriptions(
     descriptions: {
       id: string | number;
-      repo_name: string;
-      descriptions: string; // or any structure if you prefer
+      full_name: string;
+      description: string; // or any structure if you prefer
       timestamp: string;
     }[]
   ): Promise<void> {
