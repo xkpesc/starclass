@@ -110,25 +110,22 @@ async function fetchReadmeWithFileName(
 ): Promise<{ content: string | null; originalReadmeName: string | null }> {
   const octokit = getOctokitInstance();
 
-  for (const filePath of possiblePaths) {
-    try {
-      const response = await octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
-        owner,
-        repo,
-        path: filePath,
-        headers: {
-          "X-GitHub-Api-Version": "2022-11-28"
-        }
-      });
-      if (response.status === 200 && response.data.content) {
-        // atob decode the base64-encoded content
-        const content = atob(response.data.content);
-        return { content, originalReadmeName: filePath };
+  try {
+    const response = await octokit.request('GET /repos/{owner}/{repo}/readme', {
+      owner,
+      repo,
+      headers: {
+        'X-GitHub-Api-Version': '2022-11-28'
       }
-    } catch (error: any) {
-      if (error.status !== 404) {
-        console.error(`Error fetching README for ${owner}/${repo}:`, error);
-      }
+    });
+
+    if (response.status === 200 && response.data.content) {
+      const content = atob(response.data.content);
+      return { content, originalReadmeName: response.data.name };
+    }
+  } catch (error: any) {
+    if (error.status !== 404) {
+      console.error(`Error fetching README for ${owner}/${repo}:`, error);
     }
   }
   return { content: null, originalReadmeName: null };
