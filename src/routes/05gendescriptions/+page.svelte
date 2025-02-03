@@ -62,18 +62,53 @@ File: src/routes/05gendescriptions/+page.svelte
   let stddevValues = writable<number[]>([]);
   let entropyChart: Chart;
 
-  class TokenEntropyMonitor {
-    entropyWindow = [];
-    stddevWindow = [];
-    maxWindowSize;
+  // ------------------------------
+  // NEW: Add engine task queue helper
+  // ------------------------------
+  // This queue ensures that engine lifecycle operations occur sequentially.
+  let engineTaskChain: Promise<void> = Promise.resolve();
+  // Updated pushTask helper to be generic and log queued and executing tasks
+  function pushTask<T>(task: () => Promise<T>, taskName: string = "(unnamed)"): Promise<T> {
+    console.log(`[pushTask] Pushed task ${taskName}`);
+    const lastTask = engineTaskChain;
+    const resultPromise = lastTask.then(async () => {
+      console.log(`[pushTask] Executing task ${taskName}`);
+      return task();
+    }).catch(err => {
+      console.error(`[pushTask] Error in task ${taskName}:`, err);
+      throw err;
+    });
+    // Update chain (we ignore the result here)
+    engineTaskChain = resultPromise.then(() => void 0).catch(() => void 0);
+    return resultPromise;
+  }
+  // ------------------------------
 
-    constructor(windowSize = 30) {
+  class TokenEntropyMonitor {
+    entropyWindow: number[] = [];
+    stddevWindow: number[] = [];
+    maxWindowSize: number;
+    collapseWindowSize: number;
+    collapseThreshold: number;
+
+    /**
+     * Creates an instance of the TokenEntropyMonitor.
+     *
+     * @param windowSize - Maximum size of the rolling window holding raw entropy values.
+     *                     This is used to compute the current rolling standard deviation.
+     * @param collapseWindowSize - The number of recent stddev values to consider for collapse detection.
+     *                             This window will be checked to see if all values fall below the collapseThreshold.
+     * @param collapseThreshold - The threshold for stddev values below which they are considered collapsed (i.e. near zero).
+     */
+    constructor(windowSize: number = 30, collapseWindowSize: number = 5, collapseThreshold: number = 0.05) {
       this.entropyWindow = [];
       this.stddevWindow = [];
       this.maxWindowSize = windowSize;
+      this.collapseWindowSize = collapseWindowSize;
+      this.collapseThreshold = collapseThreshold;
     }
 
-    computeEntropy(logProbs) {
+    computeEntropy(logProbs: number[]): number {
       // Filter out any -Infinity (invalid) entries
       const validLogProbs = logProbs.filter(logP => logP > -Infinity);
       if (validLogProbs.length === 0) {
@@ -87,7 +122,7 @@ File: src/routes/05gendescriptions/+page.svelte
       return -normalizedProbs.reduce((acc, p) => acc + (p > 0 ? p * Math.log(p) : 0), 0);
     }
 
-    getCurrentStdDev() {
+    getCurrentStdDev(): number {
       const n = this.entropyWindow.length;
       if (n === 0) return 0;
       const mean = this.entropyWindow.reduce((a, b) => a + b, 0) / n;
@@ -95,7 +130,7 @@ File: src/routes/05gendescriptions/+page.svelte
       return Math.sqrt(variance);
     }
 
-    detectHallucination(logProbs) {
+    detectHallucination(logProbs: number[]): boolean {
       if (logProbs.length === 0) return false;
       
       const entropy = this.computeEntropy(logProbs);
@@ -115,11 +150,9 @@ File: src/routes/05gendescriptions/+page.svelte
       }
 
       // Check if a collapse in stddev (near zero) is occurring by using a window of stddev values.
-      const collapseWindowSize = 5; // Look at the last 5 tokens (adjustable)
-      const collapseThreshold = 0.05; // Values below this are considered near zero
-      if (this.stddevWindow.length >= collapseWindowSize && this.entropyWindow.length >= this.maxWindowSize) {
-        const recentWindow = this.stddevWindow.slice(-collapseWindowSize);
-        const collapseDetected = recentWindow.every(val => val < collapseThreshold);
+      if (this.stddevWindow.length >= this.collapseWindowSize && this.entropyWindow.length >= this.maxWindowSize) {
+        const recentWindow = this.stddevWindow.slice(-this.collapseWindowSize);
+        const collapseDetected = recentWindow.every(val => val < this.collapseThreshold);
         if (collapseDetected) {
           console.warn("Stddev collapse detected: recent stddev values near zero");
           return true;
@@ -150,15 +183,97 @@ File: src/routes/05gendescriptions/+page.svelte
           ? new webllm.WebWorkerMLCEngine(new Worker(), { appConfig, logLevel: "INFO" })
           : new webllm.MLCEngine({ appConfig });
       }
-      await reloadModel();
+      await pushTask(() => reloadModel(), EngineState.LOADING);
     } catch (err) {
       console.error("Initialization failed:", err);
     }
   }
 
+  async function generateDescriptionForReadme(readme: any): Promise<string> {
+    console.log(`[Task] Starting description generation for README: ${readme.full_name}`);
+    let curMessage = "";
+    try {
+      await engine.resetChat();
+      const chatHistory: webllm.ChatCompletionMessageParam[] = [
+        { role: "user", content: SYSTEM_PROMPT },
+        { role: "user", content: readme.content }
+      ];
+ 
+      const completion = await engine.chat.completions.create({
+        stream: true,
+        messages: chatHistory,
+        logprobs: true,
+        top_logprobs: 5,
+        seed: 42, // Useful for hallucination reproducibility
+        response_format: {
+          type: "grammar",
+          grammar: jsonGrammarStr,
+        } as webllm.ResponseFormat,
+      });
+ 
+      const entropyMonitor = new TokenEntropyMonitor(30, 5, 0.05);
+      for await (const chunk of completion) {
+        if ($engineState !== EngineState.GENERATING) {
+          console.log("Generation aborted during streaming for", readme.full_name);
+          break;
+        }
+ 
+        const curDelta = chunk.choices[0]?.delta.content;
+ 
+        chunk.choices.forEach((choice, choiceIndex) => {
+          choice.logprobs?.content?.forEach((tokenData, tokenIndex) => {
+            const logProbs = tokenData.top_logprobs?.slice(0, 5).map(t => t.logprob) || [];
+            const entropy = entropyMonitor.computeEntropy(logProbs);
+            entropyValues.update(values => {
+              const newValues = [...values, entropy];
+              return newValues.slice(-300);
+            });
+            const isHallucination = entropyMonitor.detectHallucination(logProbs);
+            const currentStdDev = entropyMonitor.getCurrentStdDev();
+            stddevValues.update(values => {
+              const newValues = [...values, currentStdDev];
+              return newValues.slice(-300);
+            });
+            // --- Chart Update ---
+            entropyChart.data.labels = Array.from(
+              {length: Math.min(300, $entropyValues.length)},
+              (_, i) => i + 1
+            );
+            entropyChart.data.datasets[0].data = $entropyValues;
+            entropyChart.data.datasets[1].data = $stddevValues;
+            entropyChart.update();
+            // ---------------------
+
+            if (isHallucination) {
+              console.warn(`⚠️ High entropy variance detected in ${readme.full_name} - potential hallucination!`);
+              abortGeneration();
+            }
+          });
+        });
+ 
+        if (curDelta) {
+          curMessage += curDelta;
+          current_description.set(curMessage);
+        }
+      }
+ 
+      console.log(`Task [GENERATING ${readme.full_name}] - Generated description: ${curMessage}`);
+      const timestamp = new Date().toISOString();
+      await saveDescriptions([{
+        id: readme.id,
+        full_name: readme.full_name,
+        description: curMessage,
+        timestamp
+      }]);
+    } catch (err) {
+      console.error(`Generation error for ${readme.full_name}:`, err);
+    }
+    return curMessage;
+  }
+
   async function generateTextFromReadmes() {
     if (!engine) {
-      await initializeEngine();
+      await pushTask(() => initializeEngine(), "INITIALIZING");
     }
     const readmes = await getReadmes(0);
     if (readmes.length === 0) {
@@ -169,8 +284,6 @@ File: src/routes/05gendescriptions/+page.svelte
     engineState.set(EngineState.GENERATING);
     let descriptions: string[] = [];
 
-    const entropyMonitor = new TokenEntropyMonitor(30);
-
     entropyValues.set([]);
     stddevValues.set([]);
     entropyChart.update();
@@ -179,162 +292,15 @@ File: src/routes/05gendescriptions/+page.svelte
       // Check if generation has been aborted
       if ($engineState !== EngineState.GENERATING) {
         console.log("Generation aborted.");
-        break; // Exit the loop if abort is requested
+        break;
       }
 
-      console.log("Generating text for README:", readme.full_name);
-      await engine.resetChat();
-
-      const chatHistory: webllm.ChatCompletionMessageParam[] = [
-        { role: "user", content: SYSTEM_PROMPT },
-        { role: "user", content: readme.content }
-      ];
-
-      try {
-        let curMessage = "";
-        const completion = await engine.chat.completions.create({
-          stream: true,
-          messages: chatHistory,
-          logprobs: true,
-          top_logprobs: 5,
-          // seed: 42,
-          // stream_options: {include_usage: true},
-          // TODO: implement these commented options and check for results, do not delete them
-          // presence_penalty
-          // frequency_penalty: 0.7,
-          // max_tokens
-          // ignore_eos
-          response_format: {
-            type: "grammar",
-            grammar: jsonGrammarStr,
-          } as webllm.ResponseFormat,
-        });
-
-        // Initialize watchdog variables
-        const initialTokens = 3;
-        let tokenCount = 0;
-        let tokenStartTimes: number[] = [];
-        let avgTimePerToken = 0;
-        let watchdogTimeout: ReturnType<typeof setTimeout> | null = null;
-
-        const startWatchdog = () => {
-          if (avgTimePerToken > 0) {
-            watchdogTimeout = setTimeout(() => {
-              console.warn("Watchdog timer triggered. Aborting generation due to potential hallucination.");
-              abortGeneration();
-            }, avgTimePerToken * 2); // Set timeout to twice the average time per token
-          }
-        };
-
-        const resetWatchdog = () => {
-          if (watchdogTimeout) {
-            clearTimeout(watchdogTimeout);
-            watchdogTimeout = null;
-          }
-          // startWatchdog();
-        };
-
-        for await (const chunk of completion) {
-          // Check if generation has been aborted
-          if ($engineState !== EngineState.GENERATING) {
-            console.log("Generation aborted during streaming.");
-            break; // Exit the streaming loop if abort is requested
-          }
-
-          const chunkStartTime = Date.now();
-
-          const curDelta = chunk.choices[0]?.delta.content;
-
-          // console.log("Log probabilities for each token:");
-          chunk.choices.forEach((choice, choiceIndex) => {
-            choice.logprobs?.content?.forEach((tokenData, tokenIndex) => {
-              // console.group(`Choice ${choiceIndex + 1} - Token ${tokenIndex + 1}`);
-              // console.log(`Token: ${tokenData.token}`);
-              // console.log(`Logprob: ${tokenData.logprob}`);
-              
-              // Add hallucination detection
-              const logProbs = tokenData.top_logprobs?.slice(0, 5).map(t => t.logprob) || [];
-              const entropy = entropyMonitor.computeEntropy(logProbs);
-              
-              // Update entropy values
-              entropyValues.update(values => {
-                const newValues = [...values, entropy];
-                return newValues.slice(-300); // Keep only last 300 values
-              });
-              
-              // Check for hallucination and get stddev
-              const isHallucination = entropyMonitor.detectHallucination(logProbs);
-              const currentStdDev = entropyMonitor.getCurrentStdDev();
-              
-              stddevValues.update(values => {
-                const newValues = [...values, currentStdDev];
-                return newValues.slice(-300); // Keep only last 300 values
-              });
-
-              // Update chart
-              entropyChart.data.labels = Array.from(
-                {length: Math.min(300, $entropyValues.length)}, 
-                (_, i) => i + 1
-              );
-              entropyChart.data.datasets[0].data = $entropyValues;
-              entropyChart.data.datasets[1].data = $stddevValues;
-              entropyChart.update();
-
-              if (isHallucination) {
-                console.warn('⚠️ High entropy variance detected - potential hallucination!');
-                abortGeneration();
-              }
-
-              if (tokenData.top_logprobs?.length > 0) {
-                console.log('Top 5 alternatives:');
-                tokenData.top_logprobs.slice(0, 5).forEach((top, i) => {
-                  console.log(`  ${i + 1}. ${top.token}: ${top.logprob}`);
-                });
-              }
-              // console.groupEnd();
-            });
-          });
-          
-          if (curDelta) {
-            const tokenReceivedTime = Date.now();
-            if (tokenCount < initialTokens) {
-              const timeTaken = tokenReceivedTime - chunkStartTime;
-              tokenStartTimes.push(timeTaken);
-              if (tokenCount === initialTokens - 1) {
-                avgTimePerToken = tokenStartTimes.reduce((a, b) => a + b, 0) / initialTokens;
-                console.log(`Average time per token calculated: ${avgTimePerToken} ms`);
-                // startWatchdog();
-              }
-            } else {
-              // resetWatchdog();
-            }
-
-            tokenCount += 1;
-            curMessage += curDelta;
-            current_description.set(curMessage);
-          }
-        }
-
-        // Clear watchdog after successful generation
-        if (watchdogTimeout) {
-          clearTimeout(watchdogTimeout);
-          watchdogTimeout = null;
-        }
-
-        console.log("Generated description:", curMessage);
-        descriptions.push(curMessage);
-
-        const timestamp = new Date().toISOString();
-        await saveDescriptions([{
-          id: readme.id,
-          full_name: readme.full_name,
-          description: curMessage,
-          timestamp
-        }]);
-
-      } catch (err) {
-        console.error("Generation error:", err);
-      }
+      // Push the per-readme description generation as an individual async task
+      const description = await pushTask(
+        () => generateDescriptionForReadme(readme),
+        `GENERATING ${readme.full_name}`
+      );
+      descriptions.push(description);
     }
 
     generatedDescriptions.set(descriptions);
@@ -345,11 +311,13 @@ File: src/routes/05gendescriptions/+page.svelte
     console.log("Aborting generation...");
     if ($engineState === EngineState.GENERATING) {
       engineState.set(EngineState.ABORTING);
-      engine.interruptGenerate();
-      await engine.resetChat();
-      await engine.unload();
-      await reloadModel();
-      console.log("Generation aborted.");
+      await pushTask(async () => {
+        engine.interruptGenerate();
+        await engine.resetChat();
+        await engine.unload();
+        await reloadModel();
+        console.log("Generation aborted.");
+      }, EngineState.ABORTING);
     }
     entropyValues.set([]);
     stddevValues.set([]);
@@ -403,7 +371,13 @@ File: src/routes/05gendescriptions/+page.svelte
 
   <button
     class="btn variant-filled"
-    on:click={() => ($engineState === EngineState.GENERATING ? abortGeneration() : generateTextFromReadmes())}
+    on:click={() => {
+      if ($engineState === EngineState.GENERATING) {
+        abortGeneration();
+      } else {
+        generateTextFromReadmes();
+      }
+    }}
     disabled={$engineState === EngineState.LOADING || $engineState === EngineState.ABORTING}
   >
     {#if $engineState === EngineState.LOADING}
