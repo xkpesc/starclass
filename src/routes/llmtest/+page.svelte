@@ -4,7 +4,7 @@
   import Worker from '$lib/webllm_worker?worker';
   import { onMount } from "svelte";
   import { writable } from 'svelte/store';
-  import { getReadmes } from "$lib/GithubStarredRepos";
+  import { getReadmes } from "$lib/IDBUtils";;
 
   //TODO: implement cache_usage API from web-llm/examples/cache-usage to show user if a model is present on cache
   //      and maybe to show a preload/precache button

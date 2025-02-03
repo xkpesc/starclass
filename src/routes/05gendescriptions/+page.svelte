@@ -11,6 +11,10 @@ File: src/routes/05gendescriptions/+page.svelte
   import Worker from '$lib/webllm_worker?worker';
   import { getReadmes } from "$lib/IDBUtils";
   import { saveDescriptions, getDescriptions } from '$lib/DescriptionUtils';
+  import { TokenEntropyMonitor } from '$lib/InferenceUtils';
+
+  import Chart from 'chart.js/auto';
+
 
   const defaultModel = "Llama-3.2-1B-Instruct-q4f32_1-MLC";
   
@@ -55,6 +59,10 @@ File: src/routes/05gendescriptions/+page.svelte
 
   let engineState = writable<EngineState>(EngineState.UNLOADED);
 
+  let entropyValues = writable<number[]>([]);
+  let stddevValues = writable<number[]>([]);
+  let entropyChart: Chart;
+
   async function reloadModel() {
     try {
       engineState.set(EngineState.LOADING);
@@ -94,6 +102,12 @@ File: src/routes/05gendescriptions/+page.svelte
     engineState.set(EngineState.GENERATING);
     let descriptions: string[] = [];
 
+    const entropyMonitor = new TokenEntropyMonitor(5, 1.5);
+
+    entropyValues.set([]);
+    stddevValues.set([]);
+    entropyChart.update();
+
     for (const readme of readmes) {
       // Check if generation has been aborted
       if ($engineState !== EngineState.GENERATING) {
@@ -114,6 +128,14 @@ File: src/routes/05gendescriptions/+page.svelte
         const completion = await engine.chat.completions.create({
           stream: true,
           messages: chatHistory,
+          logprobs: true,
+          top_logprobs: 5,
+          // stream_options: {include_usage: true},
+          // TODO: implement these commented options and check for results, do not delete them
+          // presence_penalty
+          // frequency_penalty
+          // max_tokens
+          // ignore_eos
           response_format: {
             type: "grammar",
             grammar: jsonGrammarStr,
@@ -141,7 +163,7 @@ File: src/routes/05gendescriptions/+page.svelte
             clearTimeout(watchdogTimeout);
             watchdogTimeout = null;
           }
-          startWatchdog();
+          // startWatchdog();
         };
 
         for await (const chunk of completion) {
@@ -154,6 +176,57 @@ File: src/routes/05gendescriptions/+page.svelte
           const chunkStartTime = Date.now();
 
           const curDelta = chunk.choices[0]?.delta.content;
+
+          // console.log("Log probabilities for each token:");
+          chunk.choices.forEach((choice, choiceIndex) => {
+            choice.logprobs?.content?.forEach((tokenData, tokenIndex) => {
+              // console.group(`Choice ${choiceIndex + 1} - Token ${tokenIndex + 1}`);
+              // console.log(`Token: ${tokenData.token}`);
+              // console.log(`Logprob: ${tokenData.logprob}`);
+              
+              // Add hallucination detection
+              const logProbs = tokenData.top_logprobs?.slice(0, 5).map(t => t.logprob) || [];
+              const entropy = entropyMonitor.computeEntropy(logProbs);
+              
+              // Update entropy values
+              entropyValues.update(values => {
+                const newValues = [...values, entropy];
+                return newValues.slice(-300); // Keep only last 300 values
+              });
+              
+              // Check for hallucination and get stddev
+              const isHallucination = entropyMonitor.detectHallucination(logProbs);
+              const currentStdDev = isHallucination ? entropyMonitor.entropyThreshold : entropyMonitor.getCurrentStdDev();
+              
+              stddevValues.update(values => {
+                const newValues = [...values, currentStdDev];
+                return newValues.slice(-300); // Keep only last 300 values
+              });
+
+              // Update chart
+              entropyChart.data.labels = Array.from(
+                {length: Math.min(300, $entropyValues.length)}, 
+                (_, i) => i + 1
+              );
+              entropyChart.data.datasets[0].data = $entropyValues;
+              entropyChart.data.datasets[1].data = $stddevValues;
+              entropyChart.update();
+
+              if (logProbs.length > 0 && entropyMonitor.detectHallucination(logProbs)) {
+                console.warn('⚠️ High entropy variance detected - potential hallucination!');
+                abortGeneration();
+              }
+
+              if (tokenData.top_logprobs?.length > 0) {
+                console.log('Top 5 alternatives:');
+                tokenData.top_logprobs.slice(0, 5).forEach((top, i) => {
+                  console.log(`  ${i + 1}. ${top.token}: ${top.logprob}`);
+                });
+              }
+              // console.groupEnd();
+            });
+          });
+          
           if (curDelta) {
             const tokenReceivedTime = Date.now();
             if (tokenCount < initialTokens) {
@@ -162,10 +235,10 @@ File: src/routes/05gendescriptions/+page.svelte
               if (tokenCount === initialTokens - 1) {
                 avgTimePerToken = tokenStartTimes.reduce((a, b) => a + b, 0) / initialTokens;
                 console.log(`Average time per token calculated: ${avgTimePerToken} ms`);
-                startWatchdog();
+                // startWatchdog();
               }
             } else {
-              resetWatchdog();
+              // resetWatchdog();
             }
 
             tokenCount += 1;
@@ -210,9 +283,44 @@ File: src/routes/05gendescriptions/+page.svelte
       await reloadModel();
       console.log("Generation aborted.");
     }
+    entropyValues.set([]);
+    stddevValues.set([]);
+    entropyChart.update();
   }
 
-  onMount(initializeEngine);
+  onMount(async () => {
+    await initializeEngine();
+    
+    // Initialize chart after component mounts
+    const ctx = document.getElementById('entropyChart') as HTMLCanvasElement;
+    entropyChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Token Entropy',
+          data: [],
+          borderColor: 'rgb(75, 192, 192)',
+          tension: 0.1
+        },
+        {
+          label: 'Rolling StdDev',
+          data: [],
+          borderColor: 'rgb(255, 99, 132)',
+          tension: 0.1,
+          pointRadius: 0
+        }]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          y: {
+            beginAtZero: true
+          }
+        }
+      }
+    });
+  });
 
   onDestroy(() => {
     if (engine) {
@@ -244,17 +352,21 @@ File: src/routes/05gendescriptions/+page.svelte
 
     <!-- TODO: show readme contents on left, show generated description on right -->
     <div class="h-full overflow-y-auto">
-      <pre>{$current_description}</pre>
+      <pre style="white-space: pre-wrap;">{$current_description}</pre>
     </div>
 
-  {#if $generatedDescriptions.length > 0}
+  <!-- {#if $generatedDescriptions.length > 0}
     <div class="results">
       <h2>Generated Descriptions (this run):</h2>
       {#each $generatedDescriptions as description}
-        <pre>{description}</pre>
+        <pre style="white-space: pre-wrap;">{description}</pre>
       {/each}
     </div>
-  {/if}
+  {/if} -->
+
+  <div class="chart-container">
+    <canvas id="entropyChart"></canvas>
+  </div>
 </div>
 
 <style>
@@ -266,6 +378,10 @@ File: src/routes/05gendescriptions/+page.svelte
 .results {
   margin-top: 20px;
   text-align: left;
+}
+.chart-container {
+  margin: 20px 0;
+  height: 300px;
 }
 </style>
 
