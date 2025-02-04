@@ -2,6 +2,8 @@
 
 - [DONE] Use this API for readmes: https://docs.github.com/en/rest/repos/contents?apiVersion=2022-11-28#get-a-repository-readme
 
+- Store rolling mean entropy value for each repo to later correlate with the certainty of each LLM.
+
 - Add static Svelte based UI (init svelte project) with: https://svelte.dev/docs/kit/adapter-static
 
 - Add github app for easier auth:

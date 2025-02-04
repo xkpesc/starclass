@@ -11,7 +11,6 @@ File: src/routes/05gendescriptions/+page.svelte
   import Worker from '$lib/webllm_worker?worker';
   import { getReadmes } from "$lib/IDBUtils";
   import { saveDescriptions, getDescriptions } from '$lib/DescriptionUtils';
-  import { TokenEntropyMonitor } from '$lib/InferenceUtils';
 
   import Chart from 'chart.js/auto';
 
@@ -63,6 +62,74 @@ File: src/routes/05gendescriptions/+page.svelte
   let stddevValues = writable<number[]>([]);
   let entropyChart: Chart;
 
+  class TokenEntropyMonitor {
+    entropyWindow = [];
+    stddevWindow = [];
+    maxWindowSize;
+
+    constructor(windowSize = 30) {
+      this.entropyWindow = [];
+      this.stddevWindow = [];
+      this.maxWindowSize = windowSize;
+    }
+
+    computeEntropy(logProbs) {
+      // Filter out any -Infinity (invalid) entries
+      const validLogProbs = logProbs.filter(logP => logP > -Infinity);
+      if (validLogProbs.length === 0) {
+        return 0;
+      }
+      // Convert log-probs to probabilities and normalize
+      const probs = validLogProbs.map(lp => Math.exp(lp));
+      const sumProbs = probs.reduce((a, b) => a + b, 0);
+      const normalizedProbs = probs.map(p => p / sumProbs);
+      // Compute entropy: H = -Σ p * log(p)
+      return -normalizedProbs.reduce((acc, p) => acc + (p > 0 ? p * Math.log(p) : 0), 0);
+    }
+
+    getCurrentStdDev() {
+      const n = this.entropyWindow.length;
+      if (n === 0) return 0;
+      const mean = this.entropyWindow.reduce((a, b) => a + b, 0) / n;
+      const variance = this.entropyWindow.reduce((sum, e) => sum + Math.pow(e - mean, 2), 0) / n;
+      return Math.sqrt(variance);
+    }
+
+    detectHallucination(logProbs) {
+      if (logProbs.length === 0) return false;
+      
+      const entropy = this.computeEntropy(logProbs);
+      console.log(`Current token entropy: ${entropy.toFixed(4)}`);
+      this.entropyWindow.push(entropy);
+      if (this.entropyWindow.length > this.maxWindowSize) {
+        this.entropyWindow.shift();
+      }
+      
+      const stdDev = this.getCurrentStdDev();
+      console.log(`Rolling entropy stddev: ${stdDev.toFixed(4)}`);
+
+      // Update stddev rolling window
+      this.stddevWindow.push(stdDev);
+      if (this.stddevWindow.length > this.maxWindowSize) {
+        this.stddevWindow.shift();
+      }
+
+      // Check if a collapse in stddev (near zero) is occurring by using a window of stddev values.
+      const collapseWindowSize = 5; // Look at the last 5 tokens (adjustable)
+      const collapseThreshold = 0.05; // Values below this are considered near zero
+      if (this.stddevWindow.length >= collapseWindowSize && this.entropyWindow.length >= this.maxWindowSize) {
+        const recentWindow = this.stddevWindow.slice(-collapseWindowSize);
+        const collapseDetected = recentWindow.every(val => val < collapseThreshold);
+        if (collapseDetected) {
+          console.warn("Stddev collapse detected: recent stddev values near zero");
+          return true;
+        }
+      }
+      
+      return false;
+    }
+  }
+
   async function reloadModel() {
     try {
       engineState.set(EngineState.LOADING);
@@ -102,7 +169,7 @@ File: src/routes/05gendescriptions/+page.svelte
     engineState.set(EngineState.GENERATING);
     let descriptions: string[] = [];
 
-    const entropyMonitor = new TokenEntropyMonitor(5, 1.5);
+    const entropyMonitor = new TokenEntropyMonitor(30);
 
     entropyValues.set([]);
     stddevValues.set([]);
@@ -130,10 +197,11 @@ File: src/routes/05gendescriptions/+page.svelte
           messages: chatHistory,
           logprobs: true,
           top_logprobs: 5,
+          // seed: 42,
           // stream_options: {include_usage: true},
           // TODO: implement these commented options and check for results, do not delete them
           // presence_penalty
-          // frequency_penalty
+          // frequency_penalty: 0.7,
           // max_tokens
           // ignore_eos
           response_format: {
@@ -196,7 +264,7 @@ File: src/routes/05gendescriptions/+page.svelte
               
               // Check for hallucination and get stddev
               const isHallucination = entropyMonitor.detectHallucination(logProbs);
-              const currentStdDev = isHallucination ? entropyMonitor.entropyThreshold : entropyMonitor.getCurrentStdDev();
+              const currentStdDev = entropyMonitor.getCurrentStdDev();
               
               stddevValues.update(values => {
                 const newValues = [...values, currentStdDev];
@@ -212,7 +280,7 @@ File: src/routes/05gendescriptions/+page.svelte
               entropyChart.data.datasets[1].data = $stddevValues;
               entropyChart.update();
 
-              if (logProbs.length > 0 && entropyMonitor.detectHallucination(logProbs)) {
+              if (isHallucination) {
                 console.warn('⚠️ High entropy variance detected - potential hallucination!');
                 abortGeneration();
               }
@@ -308,7 +376,6 @@ File: src/routes/05gendescriptions/+page.svelte
           data: [],
           borderColor: 'rgb(255, 99, 132)',
           tension: 0.1,
-          pointRadius: 0
         }]
       },
       options: {
@@ -371,7 +438,7 @@ File: src/routes/05gendescriptions/+page.svelte
 
 <style>
 .container {
-  max-width: 600px;
+  /* max-width: 600px; */
   margin: auto;
   text-align: center;
 }
@@ -381,7 +448,7 @@ File: src/routes/05gendescriptions/+page.svelte
 }
 .chart-container {
   margin: 20px 0;
-  height: 300px;
+  height: 600px;
 }
 </style>
 
