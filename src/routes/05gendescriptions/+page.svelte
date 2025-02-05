@@ -54,6 +54,8 @@ File: src/routes/05gendescriptions/+page.svelte
     LOADED = 'LOADED',
     GENERATING = 'GENERATING',
     ABORTING = 'ABORTING',
+    HALLUCINATING = 'HALLUCINATING',
+    RETRYING = 'RETRYING'
   }
 
   let engineState = writable<EngineState>(EngineState.UNLOADED);
@@ -246,7 +248,7 @@ File: src/routes/05gendescriptions/+page.svelte
 
             if (isHallucination) {
               console.warn(`⚠️ High entropy variance detected in ${readme.full_name} - potential hallucination!`);
-              abortGeneration();
+              hallucinationDetected();
             }
           });
         });
@@ -307,8 +309,9 @@ File: src/routes/05gendescriptions/+page.svelte
     engineState.set(EngineState.LOADED);
   }
 
+  // User-triggered abort generation function
   async function abortGeneration() {
-    console.log("Aborting generation...");
+    console.log("Aborting generation (user initiated)...");
     if ($engineState === EngineState.GENERATING) {
       engineState.set(EngineState.ABORTING);
       await pushTask(async () => {
@@ -316,12 +319,36 @@ File: src/routes/05gendescriptions/+page.svelte
         await engine.resetChat();
         await engine.unload();
         await reloadModel();
-        console.log("Generation aborted.");
+        console.log("Generation aborted (user initiated).");
       }, EngineState.ABORTING);
     }
     entropyValues.set([]);
     stddevValues.set([]);
     entropyChart.update();
+  }
+
+  // Handler for hallucination detection triggered abort & retry
+  async function hallucinationDetected() {
+    console.log("Aborting generation due to hallucination detection...");
+    if ($engineState === EngineState.GENERATING) {
+      engineState.set(EngineState.HALLUCINATING);
+      await pushTask(async () => {
+        engine.interruptGenerate();
+        await engine.resetChat();
+        await engine.unload();
+        await reloadModel();
+        console.log("Generation aborted (hallucination).");
+      }, EngineState.HALLUCINATING);
+    }
+    entropyValues.set([]);
+    stddevValues.set([]);
+    entropyChart.update();
+
+    // Transition to retry process
+    engineState.set(EngineState.RETRYING);
+    console.log("Retrying generation due to hallucination detection...");
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await generateTextFromReadmes();
   }
 
   onMount(async () => {
@@ -378,7 +405,7 @@ File: src/routes/05gendescriptions/+page.svelte
         generateTextFromReadmes();
       }
     }}
-    disabled={$engineState === EngineState.LOADING || $engineState === EngineState.ABORTING}
+    disabled={$engineState === EngineState.LOADING || $engineState === EngineState.ABORTING || $engineState === EngineState.HALLUCINATING || $engineState === EngineState.RETRYING}
   >
     {#if $engineState === EngineState.LOADING}
       Loading model...
@@ -386,6 +413,10 @@ File: src/routes/05gendescriptions/+page.svelte
       Aborting...
     {:else if $engineState === EngineState.GENERATING}
       Abort Generation
+    {:else if $engineState === EngineState.HALLUCINATING}
+      Hallucination detected...
+    {:else if $engineState === EngineState.RETRYING}
+      Retrying generation...
     {:else}
       Generate from READMEs
     {/if}
