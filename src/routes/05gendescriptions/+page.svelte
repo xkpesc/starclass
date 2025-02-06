@@ -53,7 +53,7 @@ File: src/routes/05gendescriptions/+page.svelte
     LOADING = 'LOADING',
     LOADED = 'LOADED',
     GENERATING = 'GENERATING',
-    ABORTING = 'ABORTING',
+    INTERRUPTING = 'INTERRUPTING',
     HALLUCINATING = 'HALLUCINATING',
     RETRYING = 'RETRYING'
   }
@@ -64,9 +64,7 @@ File: src/routes/05gendescriptions/+page.svelte
   let stddevValues = writable<number[]>([]);
   let entropyChart: Chart;
 
-  // ------------------------------
-  // NEW: Add engine task queue helper
-  // ------------------------------
+
   // This queue ensures that engine lifecycle operations occur sequentially.
   let engineTaskChain: Promise<void> = Promise.resolve();
   // Updated pushTask helper to be generic and log queued and executing tasks
@@ -84,6 +82,21 @@ File: src/routes/05gendescriptions/+page.svelte
     engineTaskChain = resultPromise.then(() => void 0).catch(() => void 0);
     return resultPromise;
   }
+
+  // This function ensures that all queued tasks are completed before proceeding.
+  async function flushTasks() {
+    console.log("[flushTasks] Flushing tasks...");
+    await engineTaskChain;
+    console.log("[flushTasks] Tasks flushed");
+  }
+
+  // New helper task function for resetting the chat.
+  async function resetChatTask() {
+    return pushTask(async () => {
+      await engine.resetChat();
+    }, "RESET_CHAT");
+  }
+
   // ------------------------------
 
   class TokenEntropyMonitor {
@@ -136,14 +149,14 @@ File: src/routes/05gendescriptions/+page.svelte
       if (logProbs.length === 0) return false;
       
       const entropy = this.computeEntropy(logProbs);
-      console.log(`Current token entropy: ${entropy.toFixed(4)}`);
+      // console.log(`Current token entropy: ${entropy.toFixed(4)}`);
       this.entropyWindow.push(entropy);
       if (this.entropyWindow.length > this.maxWindowSize) {
         this.entropyWindow.shift();
       }
       
       const stdDev = this.getCurrentStdDev();
-      console.log(`Rolling entropy stddev: ${stdDev.toFixed(4)}`);
+      // console.log(`Rolling entropy stddev: ${stdDev.toFixed(4)}`);
 
       // Update stddev rolling window
       this.stddevWindow.push(stdDev);
@@ -191,86 +204,95 @@ File: src/routes/05gendescriptions/+page.svelte
     }
   }
 
-  async function generateDescriptionForReadme(readme: any): Promise<string> {
+  interface DescriptionResult {
+    description: string;
+    hallucinationDetected: boolean;
+  }
+
+  async function generateDescriptionForReadme(readme: any): Promise<DescriptionResult> {
     console.log(`[Task] Starting description generation for README: ${readme.full_name}`);
+    console.log("generateDescriptionForReadme enginestate:", $engineState);
     let curMessage = "";
-    try {
-      await engine.resetChat();
-      const chatHistory: webllm.ChatCompletionMessageParam[] = [
-        { role: "user", content: SYSTEM_PROMPT },
-        { role: "user", content: readme.content }
-      ];
- 
-      const completion = await engine.chat.completions.create({
-        stream: true,
-        messages: chatHistory,
-        logprobs: true,
-        top_logprobs: 5,
-        seed: 42, // Useful for hallucination reproducibility
-        response_format: {
-          type: "grammar",
-          grammar: jsonGrammarStr,
-        } as webllm.ResponseFormat,
-      });
- 
-      const entropyMonitor = new TokenEntropyMonitor(30, 5, 0.05);
-      for await (const chunk of completion) {
-        if ($engineState !== EngineState.GENERATING) {
-          console.log("Generation aborted during streaming for", readme.full_name);
-          break;
-        }
- 
-        const curDelta = chunk.choices[0]?.delta.content;
- 
-        chunk.choices.forEach((choice, choiceIndex) => {
-          choice.logprobs?.content?.forEach((tokenData, tokenIndex) => {
+    let hallucinationOccurred = false;
+
+    const chatHistory: webllm.ChatCompletionMessageParam[] = [
+      { role: "user", content: SYSTEM_PROMPT },
+      { role: "user", content: readme.content }
+    ];
+    // await engine.resetChat();
+    // console.log("after resetChat");
+    // await engine.unload();
+    // console.log("after unload");
+    // await reloadModel();
+    // console.log("after reloadModel");
+    // console.log("before chat completion");
+    const completion = await engine.chat.completions.create({
+      stream: true,
+      messages: chatHistory,
+      logprobs: true,
+      top_logprobs: 5,
+      // seed: 42, // Useful for hallucination reproducibility
+      response_format: {
+        type: "grammar",
+        grammar: jsonGrammarStr,
+      } as webllm.ResponseFormat,
+    });
+    console.log("after chat completion");
+    if ($engineState === EngineState.INTERRUPTING) {
+        console.log("2Generation aborted during streaming for", readme.full_name);
+      }
+
+    const entropyMonitor = new TokenEntropyMonitor(30, 5, 0.05);
+    console.log("before outer loop");
+    outer: for await (const chunk of completion) {
+      // Only break if generation is explicitly interrupted (user abort)
+      if ($engineState === EngineState.INTERRUPTING) {
+        console.log("Generation aborted during streaming for", readme.full_name);
+        break outer;
+      }
+
+      const curDelta = chunk.choices[0]?.delta.content;
+      for (const choice of chunk.choices) {
+        if (choice.logprobs?.content) {
+          for (const tokenData of choice.logprobs.content) {
             const logProbs = tokenData.top_logprobs?.slice(0, 5).map(t => t.logprob) || [];
             const entropy = entropyMonitor.computeEntropy(logProbs);
             entropyValues.update(values => {
               const newValues = [...values, entropy];
               return newValues.slice(-300);
             });
-            const isHallucination = entropyMonitor.detectHallucination(logProbs);
-            const currentStdDev = entropyMonitor.getCurrentStdDev();
             stddevValues.update(values => {
-              const newValues = [...values, currentStdDev];
+              const newValues = [...values, entropyMonitor.getCurrentStdDev()];
               return newValues.slice(-300);
             });
-            // --- Chart Update ---
+
             entropyChart.data.labels = Array.from(
-              {length: Math.min(300, $entropyValues.length)},
+              { length: Math.min(300, $entropyValues.length) },
               (_, i) => i + 1
             );
             entropyChart.data.datasets[0].data = $entropyValues;
             entropyChart.data.datasets[1].data = $stddevValues;
             entropyChart.update();
-            // ---------------------
 
-            if (isHallucination) {
+            if (entropyMonitor.detectHallucination(logProbs)) {
               console.warn(`⚠️ High entropy variance detected in ${readme.full_name} - potential hallucination!`);
-              hallucinationDetected();
+              handleHallucination();
+              hallucinationOccurred = true;
+              break outer;
             }
-          });
-        });
- 
-        if (curDelta) {
-          curMessage += curDelta;
-          current_description.set(curMessage);
+          }
         }
       }
- 
-      console.log(`Task [GENERATING ${readme.full_name}] - Generated description: ${curMessage}`);
-      const timestamp = new Date().toISOString();
-      await saveDescriptions([{
-        id: readme.id,
-        full_name: readme.full_name,
-        description: curMessage,
-        timestamp
-      }]);
-    } catch (err) {
-      console.error(`Generation error for ${readme.full_name}:`, err);
+      
+
+      if (curDelta) {
+        curMessage += curDelta;
+        current_description.set(curMessage);
+      }
     }
-    return curMessage;
+    
+    console.log("returning from generateDescriptionForReadme");
+    return { description: curMessage, hallucinationDetected: hallucinationOccurred };
   }
 
   async function generateTextFromReadmes() {
@@ -292,17 +314,30 @@ File: src/routes/05gendescriptions/+page.svelte
 
     for (const readme of readmes) {
       // Check if generation has been aborted
+      console.log("engineState:", $engineState);
       if ($engineState !== EngineState.GENERATING) {
         console.log("Generation aborted.");
         break;
       }
 
-      // Push the per-readme description generation as an individual async task
-      const description = await pushTask(
-        () => generateDescriptionForReadme(readme),
-        `GENERATING ${readme.full_name}`
-      );
-      descriptions.push(description);
+      let attempts = 0;
+      const maxAttempts = 3;
+      let result;
+      do {
+        console.log(`attempt #${attempts}`);
+        // resetChatTask();
+        await flushTasks();
+        result = await pushTask(
+          () => generateDescriptionForReadme(readme),
+          `GENERATING ${readme.full_name}`
+        );
+        if (result.hallucinationDetected) {
+          attempts++;
+          console.log(`Retrying generation for ${readme.full_name} due to hallucination. Attempt ${attempts}`);
+        }
+      } while (result.hallucinationDetected && attempts < maxAttempts);
+
+      descriptions.push(result.description);
     }
 
     generatedDescriptions.set(descriptions);
@@ -313,43 +348,40 @@ File: src/routes/05gendescriptions/+page.svelte
   async function abortGeneration() {
     console.log("Aborting generation (user initiated)...");
     if ($engineState === EngineState.GENERATING) {
-      engineState.set(EngineState.ABORTING);
+      engineState.set(EngineState.INTERRUPTING);
       await pushTask(async () => {
         engine.interruptGenerate();
-        await engine.resetChat();
-        await engine.unload();
-        await reloadModel();
+        // await engine.resetChat();
+        // await engine.unload();
+        // await reloadModel();
         console.log("Generation aborted (user initiated).");
-      }, EngineState.ABORTING);
+      }, EngineState.INTERRUPTING);
     }
     entropyValues.set([]);
     stddevValues.set([]);
     entropyChart.update();
   }
 
-  // Handler for hallucination detection triggered abort & retry
-  async function hallucinationDetected() {
-    console.log("Aborting generation due to hallucination detection...");
+  // New function to gracefully handle hallucination without throwing an error.
+  async function handleHallucination() {
+    console.log("Handling hallucination: aborting generation for the current readme...");
     if ($engineState === EngineState.GENERATING) {
-      engineState.set(EngineState.HALLUCINATING);
+      engineState.set(EngineState.INTERRUPTING);
       await pushTask(async () => {
         engine.interruptGenerate();
-        await engine.resetChat();
-        await engine.unload();
-        await reloadModel();
-        console.log("Generation aborted (hallucination).");
-      }, EngineState.HALLUCINATING);
+        // await engine.resetChat();
+        // await engine.unload();
+        // await reloadModel();
+        console.log("Engine reset due to hallucination.");
+      }, EngineState.INTERRUPTING);
     }
+    // Clear token tracking and chart data
     entropyValues.set([]);
     stddevValues.set([]);
     entropyChart.update();
-
-    // Transition to retry process
-    engineState.set(EngineState.RETRYING);
-    console.log("Retrying generation due to hallucination detection...");
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    await generateTextFromReadmes();
+    // await new Promise(resolve => setTimeout(resolve, 1000));
   }
+
 
   onMount(async () => {
     await initializeEngine();
@@ -405,11 +437,11 @@ File: src/routes/05gendescriptions/+page.svelte
         generateTextFromReadmes();
       }
     }}
-    disabled={$engineState === EngineState.LOADING || $engineState === EngineState.ABORTING || $engineState === EngineState.HALLUCINATING || $engineState === EngineState.RETRYING}
+    disabled={$engineState === EngineState.LOADING || $engineState === EngineState.INTERRUPTING || $engineState === EngineState.HALLUCINATING || $engineState === EngineState.RETRYING}
   >
     {#if $engineState === EngineState.LOADING}
       Loading model...
-    {:else if $engineState === EngineState.ABORTING}
+    {:else if $engineState === EngineState.INTERRUPTING}
       Aborting...
     {:else if $engineState === EngineState.GENERATING}
       Abort Generation
