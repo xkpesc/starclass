@@ -2,7 +2,9 @@
 
 - [DONE] Use this API for readmes: https://docs.github.com/en/rest/repos/contents?apiVersion=2022-11-28#get-a-repository-readme
 
+- Use XState for engine state management.
 - Store rolling mean entropy value for each repo to later correlate with the certainty of each LLM.
+- Try deepseek r1.
 
 - Add static Svelte based UI (init svelte project) with: https://svelte.dev/docs/kit/adapter-static
 
