@@ -78,7 +78,7 @@
                         
                             <Step class="h-full flex flex-col items-stretch justify-between p-10"
                             regionHeader="flex-initial self-center"
-                            regionContent="overflow-hidden flex-initial"
+                            regionContent="overflow-hidden flex-initial flex-col"
                             regionNavigation="flex-initial pt-4">
                                 <svelte:fragment slot="header">{header}</svelte:fragment>
                                     <svelte:component this={component}/>

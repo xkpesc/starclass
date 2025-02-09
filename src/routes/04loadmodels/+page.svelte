@@ -7,6 +7,7 @@ End of File: src/routes/04loadmodels/+page.svelte
   import { onMount, onDestroy } from 'svelte';
   import * as webllm from '@mlc-ai/web-llm';
   import { writable } from 'svelte/store';
+  // TODO: move appConfig from step 05gendescriptions int $lib and both here and there
   import appConfig from '$lib/app-config';
   import Worker from '$lib/webllm_worker?worker';
   import { ProgressBar } from '@skeletonlabs/skeleton';

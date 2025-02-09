@@ -15,14 +15,17 @@ import {
   } from "./IDBUtils";
   
   /**
-   * Save an array of descriptions to IndexedDB's DESCRIPTIONS_STORE
+   * Save an array of descriptions to IndexedDB's DESCRIPTIONS_STORE.
+   * Each description object now includes a "model" field indicating the model used in inference.
    */
   export async function saveDescriptions(
     descriptions: {
       id: string | number;
       full_name: string;
       description: string; // or any structure if you prefer
+      model: string;       // new field for model name
       timestamp: string;
+      status: string;      // new field to indicate generation status (e.g., "ok", "entropy_collapse", "error")
     }[]
   ): Promise<void> {
     await ensureDBInitialized();
